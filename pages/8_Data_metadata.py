@@ -5,22 +5,22 @@ import plotly.graph_objects as go
 from utils import load_data
 
 st.set_page_config(layout="wide")
-st.title("ℹ️ Datakwaliteit & Metadata")
+st.title("ℹ️ Onderliggende (meta)data")
 st.markdown("Controle op volledigheid, meetgaten en taxonomische consistentie.")
 
 df = load_data()
 
 # --- 1. ALGEMENE METADATA ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Totaal aantal records", f"{len(df):,}")
-col2.metric("Unieke Locaties", df['locatie_id'].nunique())
-col3.metric("Unieke Soorten", df['soort'].nunique())
-col4.metric("Jaren bereik", f"{df['jaar'].min()} - {df['jaar'].max()}")
+col1.metric("totaal aantal records", f"{len(df):,}")
+col2.metric("unieke locaties", df['locatie_id'].nunique())
+col3.metric("unieke soorten", df['soort'].nunique())
+col4.metric("jaren bereik", f"{df['jaar'].min()} - {df['jaar'].max()}")
 
 st.divider()
 
 # --- 2. MEETGATEN ANALYSE (HEATMAP) ---
-st.subheader("📅 Tijdruimtelijke Dekking & Meetgaten")
+st.subheader("📅 Tijdruimtelijke meetinspanning")
 st.markdown("Blauwe vlakken geven aan dat er gemeten is. Witte gaten zijn ontbrekende jaren per locatie.")
 
 # Pivot table: Index=Locatie, Kolom=Jaar, Waarde=Aantal metingen (of aanwezigheid)
@@ -47,13 +47,13 @@ with c1:
     st.plotly_chart(fig_obs, use_container_width=True)
 with c2:
     fig_locs = px.line(locs_per_year, x='jaar', y='aantal_locaties', markers=True, 
-                       title="Aantal bezochte locaties per jaar", line_shape='spline')
+                       title="Aantal bezochte meetlocaties per jaar", line_shape='spline')
     fig_locs.update_yaxes(range=[0, df['locatie_id'].nunique() + 5])
     st.plotly_chart(fig_locs, use_container_width=True)
 
 # --- 4. CONSISTENTIE SOORTENNAAM ---
 st.divider()
-st.subheader("Taxonomische Consistentie")
+st.subheader("Taxonomische consistentie")
 st.markdown("Controleer hieronder op zeldzame spellingen of dubbele namen (mogelijk invoerfouten).")
 
 species_counts = df['soort'].value_counts().reset_index()
@@ -67,7 +67,7 @@ species_counts['Status'] = species_counts['Aantal Records'].apply(
 st.dataframe(species_counts, use_container_width=True)
 
 # --- 5. RUIMTELIJKE SPREIDING ---
-st.subheader("Ruimtelijke Dekking")
+st.subheader("Ruimtelijke dekking meetnet")
 st.markdown("Overzicht van alle unieke meetpunten in de dataset.")
 
 # Simpele kaart met alle unieke punten (ongeacht jaar)

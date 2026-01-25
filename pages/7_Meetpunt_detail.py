@@ -6,7 +6,7 @@ from utils import load_data, interpret_soil_state
 
 st.set_page_config(layout="wide", page_title="Meetpunt Detail")
 
-st.title("📍 Meetpunt Detail")
+st.title("📍 Meetpunt detailniveau analyse")
 st.markdown("Gedetailleerde analyse van een specifiek monitoringspunt.")
 
 # --- DATA INLADEN ---
@@ -22,7 +22,7 @@ if df.empty:
 # 1. Project Filter
 all_projects = sorted(df['Project'].dropna().unique())
 selected_projects = st.sidebar.multiselect(
-    "Selecteer Project(en)", 
+    "Selecteer project(en)", 
     options=all_projects, 
     default=all_projects
 )
@@ -31,7 +31,7 @@ selected_projects = st.sidebar.multiselect(
 df_proj_filtered = df[df['Project'].isin(selected_projects)]
 all_bodies = sorted(df_proj_filtered['Waterlichaam'].dropna().unique())
 selected_bodies = st.sidebar.multiselect(
-    "Selecteer Waterlichaam / Waterlichamen",
+    "Selecteer waterlichaam / waterlichamen",
     options=all_bodies,
     default=all_bodies
 )
@@ -44,7 +44,7 @@ if not available_locs:
     st.warning("Geen meetpunten gevonden voor de geselecteerde filters.")
     st.stop()
 
-selected_loc = st.sidebar.selectbox("Selecteer Meetlocatie", available_locs)
+selected_loc = st.sidebar.selectbox("Selecteer meetlocatie", available_locs)
 
 # --- DATA VOORBEREIDING ---
 df_loc = df[df['locatie_id'] == selected_loc]
@@ -52,11 +52,11 @@ df_loc = df[df['locatie_id'] == selected_loc]
 # --- HEADER INFO (KPI'S) ---
 col1, col2, col3 = st.columns(3)
 col1.metric("Aantal metingen", len(df_loc['jaar'].unique()))
-col2.metric("Laatste Eco Score", f"{df_loc[df_loc['jaar'] == df_loc['jaar'].max()]['eco_score'].mean():.1f}")
-col3.metric("Gemiddelde Diepte", f"{df_loc['diepte_m'].mean():.2f} m")
+col2.metric("Gemiddelde diepte", f"{df_loc['diepte_m'].mean():.2f} m")
+col3.metric("Gemiddeld doorzicht", f"{df_loc['doorzicht_m'].mean():.2f} m")
 
 # --- TABS ---
-tab1, tab2 = st.tabs(["📈 Tijdreeksen", "📝 Diagnose & Soorten"])
+tab1, tab2 = st.tabs(["📈 Tijdreeksen", "📝 Diagnose en aangetroffen soorten"])
 
 with tab1:
     st.subheader(f"Trendontwikkeling: {selected_loc}")
@@ -85,7 +85,7 @@ with tab1:
     fig.add_trace(go.Bar(
         x=df_trend['jaar'],
         y=df_trend['totaal_bedekking_locatie'],
-        name='Totale Bedekking (%)',
+        name='Totale bedekking (%)',
         marker_color='rgba(34, 139, 34, 0.6)',
         yaxis='y'
     ))
@@ -103,7 +103,7 @@ with tab1:
 
     # Layout met dubbele as
     fig.update_layout(
-        title="Interactie: Vegetatie (Staven) vs. Waterkolom (Lijn/Vlak)",
+        title="Interactie: vegetatie (staven) vs. waterkolom (lijn/vlak)",
         xaxis=dict(title="Jaar"),
         
         # Linker Y-as: Bedekking
@@ -140,7 +140,7 @@ with tab2:
         st.write(interpret_soil_state(df_latest))
     
     with col_b:
-        st.markdown(f"### Soortenlijst & Historie")
+        st.markdown(f"### Soortenlijst en historie")
 
         # 1. Haal alle unieke jaren per soort op voor DEZE locatie
         # We groeperen op soort en maken een lijst van unieke jaren, gesorteerd van nieuw naar oud
@@ -153,7 +153,7 @@ with tab2:
         )
 
         # 2. Pak de data van het laatste jaar
-        df_species_now = df_latest[df_latest['type'] == 'Soort'][['soort', 'bedekking_pct', 'indicator_cat', 'groeivorm']]
+        df_species_now = df_latest[df_latest['type'] == 'Soort'][['soort', 'bedekking_pct', 'groeivorm']]
 
         # 3. Combineer de actuele data met de historie-lijst
         # We gebruiken een 'left join' zodat we de details van nu behouden en de historie eraan plakken

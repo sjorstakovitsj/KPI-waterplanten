@@ -6,24 +6,24 @@ from utils import load_data, plot_trend_line, add_species_group_columns, calcula
 
 st.set_page_config(page_title="Waterplanten Monitor", layout="wide")
 
-st.title("🌱 Waterplanten & Bodemkwaliteit Dashboard")
-st.markdown("Monitoringsdata analyse - Focus op bio-indicatie per waterlichaam.")
+st.title("🌱 Waterplanten dashboard IJsselmeergebied")
+st.markdown("Gemiddelden van geselecteerd meetjaar.")
 
 # --- DATA INLADEN ---
 df = load_data()
 
 # --- SIDEBAR: GLOBALE FILTERS ---
-st.sidebar.header("Algemene Filters")
+st.sidebar.header("Algemene filters")
 
 if not df.empty:
     # 1. Peiljaar (voor de KPI's en Tabel)
     all_years = sorted(df['jaar'].dropna().unique(), reverse=True)
-    selected_year = st.sidebar.selectbox("Selecteer Peiljaar", all_years)
+    selected_year = st.sidebar.selectbox("Selecteer meetjaar", all_years)
 
     # 2. Project Filter (KRW / N2000)
     all_projects = sorted(df['Project'].dropna().unique())
     selected_projects = st.sidebar.multiselect(
-        "Selecteer Project(en)", 
+        "Selecteer project(en)", 
         options=all_projects, 
         default=all_projects 
     )
@@ -45,23 +45,18 @@ avg_bedekking, d_bedekking = calculate_kpi(df_year, df_prev, 'totaal_bedekking_l
 avg_doorzicht, d_doorzicht = calculate_kpi(df_year, df_prev, 'doorzicht_m', is_loc_metric=True)
 n_soorten = df_year['soort'].nunique()
 d_soorten = n_soorten - (df_prev['soort'].nunique() if not df_prev.empty else n_soorten)
-idx_score, d_idx = calculate_kpi(df_year, df_prev, 'eco_score', is_loc_metric=False)
 
 # KPI Weergave
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1: st.metric("Gem. Totale Bedekking", f"{avg_bedekking:.1f}%", f"{d_bedekking:.1f}%")
-with c2: st.metric("Gem. Doorzicht", f"{avg_doorzicht:.2f}m", f"{d_doorzicht:.2f}m")
-with c3: st.metric("Soortenrijkdom", n_soorten, d_soorten)
-with c4: st.metric("Indicator Index", f"{idx_score:.1f}", f"{d_idx:.1f}")
-with c5:
-    if idx_score >= 6: st.success("Status: GOED")
-    elif idx_score >= 4: st.warning("Status: MATIG")
-    else: st.error("Status: SLECHT")
+c1, c2, c3 = st.columns(3)
+with c1: st.metric("gem. totale bedekking", f"{avg_bedekking:.1f}%", f"{d_bedekking:.1f}%")
+with c2: st.metric("gem. doorzicht", f"{avg_doorzicht:.2f}m", f"{d_doorzicht:.2f}m")
+with c3: st.metric("gem. soortenrijkdom", n_soorten, d_soorten)
+
 
 st.divider()
 
 # --- 2. DETAILOVERZICHT PER WATERLICHAAM ---
-st.subheader(f"📊 Toestand per Waterlichaam ({selected_year})")
+st.subheader(f"📊 Opsomming per waterlichaam ({selected_year})")
 
 if not df_year.empty:
     # Aggregatie stap 1: Per monstername (uniek maken van locatie-variabelen)
@@ -77,39 +72,34 @@ if not df_year.empty:
         'diepte_m': 'mean',
         'doorzicht_m': 'mean'
     }).reset_index()
-    
-    # Aggregatie stap 3: Bio-data (Soorten & Scores komen uit de 'long' dataframe)
-    df_bio_stats = df_year.groupby('Waterlichaam').agg({
-        'soort': 'nunique',
-        'eco_score': 'mean'
-    }).reset_index()
-    
-    # Samenvoegen
-    overview_df = pd.merge(df_water_stats, df_bio_stats, on='Waterlichaam')
+      
+    # 2. Bereken de Soortenrijkdom (unieke soorten per waterlichaam)
+    # Filter eerst op type 'Soort' om te voorkomen dat groepen als 'FLAB' worden meegeteld
+    df_species_only = df_year[df_year['type'] == 'Soort']
+    df_richness = df_species_only.groupby('Waterlichaam')['soort'].nunique().reset_index()
+    df_richness.columns = ['Waterlichaam', 'Soortenrijkdom']
+        
+    # 3. Voeg de twee tabellen samen (Merge)
+    overview_df = pd.merge(df_water_stats, df_richness, on='Waterlichaam', how='left')
 
-    # Formatting
-    def determine_status(score):
-        if pd.isna(score): return "❓ Onbekend"
-        return "✅ Goed" if score >= 6 else "⚠️ Matig" if score >= 4 else "❌ Slecht"
-
-    overview_df['Toestand'] = overview_df['eco_score'].apply(determine_status)
     overview_df = overview_df.rename(columns={
         'totaal_bedekking_locatie': 'Bedekking (Totaal %)',
         'diepte_m': 'Gem. Diepte (m)',
         'doorzicht_m': 'Gem. Doorzicht (m)',
-        'soort': 'Soortenrijkdom',
-        'eco_score': 'Indicator Index'
     })
 
+    # Zorg dat lege waarden (NaN) in rijkdom op 0 staan
+    overview_df['Soortenrijkdom'] = overview_df['Soortenrijkdom'].fillna(0).astype(int)
+    
     # Tabel weergave
     st.dataframe(
-        overview_df[['Waterlichaam', 'Toestand', 'Bedekking (Totaal %)', 'Gem. Diepte (m)', 'Gem. Doorzicht (m)', 'Soortenrijkdom', 'Indicator Index']],
+        overview_df[['Waterlichaam', 'Bedekking (Totaal %)', 'Gem. Diepte (m)', 'Gem. Doorzicht (m)', 'Soortenrijkdom']],
         use_container_width=True, hide_index=True,
         column_config={
             "Bedekking (Totaal %)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
             "Gem. Diepte (m)": st.column_config.NumberColumn(format="%.2f m"),
             "Gem. Doorzicht (m)": st.column_config.NumberColumn(format="%.2f m"),
-            "Indicator Index": st.column_config.NumberColumn(format="%.1f")
+            "Soortenrijkdom": st.column_config.NumberColumn(format="%d soorten")
         }
     )
 else:
@@ -118,7 +108,7 @@ else:
 st.divider()
 
 # --- 3. TREND ANALYSE (Met specifieke selectie) ---
-st.subheader("📈 Trendanalyse & Groeivormen")
+st.subheader("📈 Basale trendanalyse")
 
 # Lijst van specifieke RWS-groeivormcodes (nodig voor filtering 3e grafiek)
 RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
@@ -126,7 +116,7 @@ RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EM
 # A. Trend Selectie Filter (Specifiek voor de grafieken)
 available_bodies = sorted(df_filtered['Waterlichaam'].unique())
 selected_trend_bodies = st.multiselect(
-    "Selecteer Waterlichaam / Waterlichamen voor trendlijn:",
+    "Selecteer waterlichaam / waterlichamen voor trendlijn:",
     options=available_bodies,
     default=available_bodies[:3] if len(available_bodies) > 0 else available_bodies
 )
@@ -139,7 +129,7 @@ if selected_trend_bodies:
 
     # --- GRAFIEK 1: TOTALE BEDEKKING (WATPTN) ---
     with c_trend1:
-        st.markdown("**Totale Bedekking (WATPTN)**")
+        st.markdown("**Totale bedekking**")
         # Stap 1: Dedup per sample (anders tellen we WATPTN dubbel per soort)
         df_trend_samples = df_trend_base.groupby(['jaar', 'Waterlichaam', 'CollectieReferentie'])['totaal_bedekking_locatie'].first().reset_index()
         
@@ -152,14 +142,14 @@ if selected_trend_bodies:
             y='totaal_bedekking_locatie', 
             color='Waterlichaam',
             markers=True,
-            title="Trend Totale Bedekking (%) per Waterlichaam"
+            title="Trend totale Bedekking (%) per waterlichaam"
         )
         fig_cover.update_layout(height=350, legend=dict(orientation="h", y=-0.2))
         st.plotly_chart(fig_cover, use_container_width=True)
 
     # --- GRAFIEK 2: BEDEKKINGSVORMEN (GROWTH FORMS) ---
     with c_trend2:
-        st.markdown("**Samenstelling Groeivormen** (Hoofdgroepen)")
+        st.markdown("**Samenstelling groeivormen**")
         
         # STAP A: Filter eerst ALLE individuele soorten eruit.
         # We willen alleen de hoofdgroepen (Submers, Drijvend, etc.) zien.
@@ -179,7 +169,7 @@ if selected_trend_bodies:
                 y='bedekking_pct', 
                 color='groeivorm',
                 markers=True,
-                title="Trend Groeivormen (Gemiddeld)"
+                title="Trend groeivormen (gemiddelden)"
             )
             fig_forms.update_layout(height=350, legend=dict(orientation="h", y=-0.2))
             st.plotly_chart(fig_forms, use_container_width=True)
@@ -188,7 +178,7 @@ if selected_trend_bodies:
 
     # --- GRAFIEK 3: RELATIEVE SAMENSTELLING SOORTGROEPEN (NIEUW) ---
     st.divider()
-    st.markdown("**Relatieve samenstelling Soortgroepen (Taxonomisch)**")
+    st.markdown("**Relatieve samenstelling soortgroepen**")
     
     # 1. Data voorbereiden: Filter RWS codes & 'Groep' types eruit
     df_species_raw = df_trend_base[~df_trend_base['soort'].isin(RWS_GROEIVORM_CODES)].copy()
@@ -218,7 +208,7 @@ if selected_trend_bodies:
             x='jaar',
             y='percentage_relatief',
             color='soortgroep',
-            title='Relatieve samenstelling soortgroepen (O.b.v. geselecteerde waterlichamen)',
+            title='Relatieve samenstelling soortgroepen van geselecteerde waterlichamen',
             labels={
                 'percentage_relatief': 'Aandeel (%)', 
                 'jaar': 'Jaar',

@@ -5,7 +5,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from utils import load_data
 
-st.title("🔗 Relaties & Multivariate Analyse")
+st.title("🔗 Relaties en multivariate analyse")
 df = load_data()
 
 # Check of data geladen is
@@ -13,7 +13,7 @@ if df.empty:
     st.error("Geen data beschikbaar.")
     st.stop()
 
-year_pca = st.selectbox("Kies analyse jaar", sorted(df['jaar'].unique()))
+year_pca = st.selectbox("Kies jaar analyse", sorted(df['jaar'].unique()))
 
 # --- SCATTERPLOTS ---
 c1, c2 = st.columns(2)
@@ -24,19 +24,19 @@ with c1:
 with c2:
     # Aggregeren per locatie voor soortenrijkdom
     df_div = df[df['jaar']==year_pca].groupby('locatie_id').agg({
-        'soort': 'nunique', 'doorzicht_m': 'mean', 'eco_score': 'mean'
+        'soort': 'nunique', 'doorzicht_m': 'mean'
     }).reset_index()
-    fig_scat2 = px.scatter(df_div, x="doorzicht_m", y="soort", color="eco_score", 
+    fig_scat2 = px.scatter(df_div, x="doorzicht_m", y="soort", 
                            title="Doorzicht vs Soortenrijkdom")
     st.plotly_chart(fig_scat2, use_container_width=True)
 
 # --- PCA ANALYSE ---
 st.divider()
-st.subheader("Multivariate Cluster Analyse (PCA)")
+st.subheader("Multivariate clusteranalyse (PCA)")
 st.caption("Clustering van meetpunten op basis van soortensamenstelling (bedekking).")
 
 # --- EXPLAINER: HOE LEES IK DIT? ---
-with st.expander("ℹ️ Uitleg: Hoe interpreteer ik deze PCA plot?", expanded=False):
+with st.expander("ℹ️ Uitleg: hoe interpreteer ik deze PCA plot?", expanded=False):
     st.markdown("""
     **Wat doet deze analyse?**
     Op elke locatie komen verschillende waterplanten voor in verschillende hoeveelheden. Omdat we tientallen soorten hebben, is het lastig om locaties direct met elkaar te vergelijken. 
@@ -47,8 +47,7 @@ with st.expander("ℹ️ Uitleg: Hoe interpreteer ik deze PCA plot?", expanded=F
     * **Afstand zegt alles:** * Punten die **dicht bij elkaar** staan, hebben een **vergelijkbare vegetatie** (dezelfde soorten in dezelfde dichtheden).
         * Punten die **ver uit elkaar** staan, zijn qua plantengroei totaal verschillend.
     * **Clusters:** Als je groepjes punten ziet, zijn dit locaties die op elkaar lijken (bijv. 'diepe soortenarme locaties' vs 'ondiepe soortenrijke locaties').
-    * **Kleur (Eco Score):** De kleur geeft de ecologische kwaliteit aan. Zo kun je zien of een bepaalde samenstelling van planten (een cluster) samenhangt met een goede (groen) of slechte (rood) beoordeling.
-    """)
+        """)
 
 # Data voorbereiden: Pivot table (Locaties x Soorten)
 df_pca_source = df[df['jaar'] == year_pca]
@@ -78,17 +77,16 @@ if len(pivot_df) > 5:
     
     # Koppelen aan meta-data (bijv. gemiddelde eco_score) voor kleur
     # We gebruiken 'mean' voor het geval er dubbele entries zouden zijn per locatie, hoewel locatie uniek zou moeten zijn in pivot
-    meta = df_pca_source.groupby('locatie_id')['eco_score'].mean().reset_index()
+    meta = df_pca_source.groupby('locatie_id').mean(numeric_only=True).reset_index()
     pca_final = pd.merge(pca_df, meta, on='locatie_id')
 
     fig_pca = px.scatter(
         pca_final, 
         x='PC1', 
         y='PC2', 
-        color='eco_score', 
         hover_data=['locatie_id'],
         color_continuous_scale='RdYlGn', 
-        title=f"PCA Vegetatiecompositie {year_pca}",
+        title=f"PCA vegetatiesamenstelling {year_pca}",
         labels={'PC1': f'PC1 ({explained_variance[0]:.1%})', 'PC2': f'PC2 ({explained_variance[1]:.1%})'}
     )
     
@@ -97,6 +95,6 @@ if len(pivot_df) > 5:
     fig_pca.add_vline(x=0, line_dash="dash", line_color="grey", opacity=0.5)
     
     st.plotly_chart(fig_pca, use_container_width=True)
-    st.caption(f"Statistische notitie: {var_text}. Dit betekent dat deze 2D-weergave ongeveer {sum(explained_variance):.0%} van de totale verschillen in vegetatie samenvat.")
+    st.caption(f"NB.: {var_text}. Dit betekent dat deze 2D-weergave ongeveer {sum(explained_variance):.0%} van de totale verschillen in vegetatie samenvat.")
 else:
     st.warning("Te weinig meetpunten (>5 nodig) om een betrouwbare clusteranalyse uit te voeren voor dit jaar.")

@@ -14,12 +14,12 @@ from utils import (
 )
 
 st.set_page_config(layout="wide")
-st.title("📈 Tijd- en Trendanalyse")
+st.title("📈 Tijd- en trendanalyse")
 
 df = load_data()
 
 # --- SIDEBAR FILTERS ---
-st.sidebar.header("Trend Filters")
+st.sidebar.header("Selectiefilters")
 
 if df.empty:
     st.error("Geen data geladen.")
@@ -28,29 +28,24 @@ if df.empty:
 # 1. Selectie Waterlichaam
 all_bodies = sorted(df['Waterlichaam'].unique())
 selected_bodies = st.sidebar.multiselect(
-    "Selecteer Waterlichaam / Waterlichamen", 
+    "Selecteer waterlichaam / waterlichamen", 
     options=all_bodies, 
     default=all_bodies[:1] if all_bodies else []
 )
 
-# 2. Selectie Indicator Categorie
-all_cats = sorted(df['indicator_cat'].unique())
-selected_cats = st.sidebar.multiselect("Filter op Indicatorsoort", all_cats, default=all_cats)
-
 # 3. Metriek Keuze
 metric_options = {
     'Bedekkingsgraad (%)': 'bedekking_pct',
-    'Indicator Score': 'eco_score',
     'Doorzicht (m)': 'doorzicht_m',
+    'Diepte (m)': 'diepte_m',
     'Soortenrijkdom': 'soort_count'
 }
-selected_metric_label = st.sidebar.selectbox("Kies Analyse Variabele", list(metric_options.keys()))
+selected_metric_label = st.sidebar.selectbox("Kies analysevariabele", list(metric_options.keys()))
 selected_metric = metric_options[selected_metric_label]
 
 # --- DATA FILTEREN ---
 df_filtered = df[
-    (df['Waterlichaam'].isin(selected_bodies)) & 
-    (df['indicator_cat'].isin(selected_cats))
+    (df['Waterlichaam'].isin(selected_bodies))
 ]
 
 if df_filtered.empty:
@@ -70,18 +65,20 @@ fig_line = px.line(df_trend, x='jaar', y='waarde', color='locatie_id', markers=T
 st.plotly_chart(fig_line, use_container_width=True)
 
 # --- 2. SLOPE ANALYSE (Berekening) ---
-st.subheader("Slope Analyse: Verbetert of verslechtert de toestand?")
+st.subheader("Regressieanalyse: verbetert of verslechtert de toestand?")
 st.markdown("Analyse per meetpunt over de beschikbare jaren.")
 
 # Uitleg over de Slope
-with st.expander("ℹ️ Hoe interpreteer ik de Slope (Trendgetal)?", expanded=False):
+with st.expander("ℹ️ Hoe interpreteer ik de hellingwaarde?", expanded=False):
     st.markdown(f"""
-    De **slope** (richtingscoëfficiënt) is een getal dat de gemiddelde verandering per jaar aangeeft op basis van een lineaire trendlijn.
+    De **helling** (richtingscoëfficiënt) is een getal dat de gemiddelde verandering per meetjaar aangeeft op basis van lineaire regressie.
     
-    * **Positief getal (+):** De waarde stijgt gemiddeld elk jaar. 
-        * *Voorbeeld:* Een slope van `0.5` bij Bedekkingsgraad betekent dat de bedekking gemiddeld met 0.5% per jaar toeneemt.
-    * **Negatief getal (-):** De waarde daalt gemiddeld elk jaar.
+    * **Positief getal (+):** De waarde stijgt gemiddeld elk meetjaar. 
+        * *Voorbeeld:* Een slope van `5.0` bij bedekkingsgraad betekent dat de bedekking gemiddeld met 5% per meetjaar toeneemt.
+    * **Negatief getal (-):** De waarde daalt gemiddeld elk meetjaar.
     * **Nul (0):** Er is geen stijgende of dalende trend (stabiel).
+    
+    De criteria van de regressieanalyse is als volgt: 0.1 voor diepte en doorzicht, 0.4 voor soortenrijkdom en 1.0 voor bedekkingsgraad.
     
     *Let op: In deze tabel worden alleen locaties getoond met **minimaal 5 meetjaren**.*
     """)
@@ -107,22 +104,29 @@ for loc in unique_locs:
 df_slopes = pd.DataFrame(slopes) if slopes else pd.DataFrame(columns=['locatie_id', 'slope', 'n_jaren'])
 
 if not df_slopes.empty:
-    # Categorie bepalen (nu via util functie)
-    threshold = 0.1 if selected_metric == 'eco_score' else 0.5 
+    # Specifieke thresholds per metriek bepalen
+    if selected_metric == 'diepte_m':
+        threshold = 0.1
+    elif selected_metric == 'doorzicht_m':
+        threshold = 0.1
+    elif selected_metric == 'Soortenrijkdom':
+        threshold = 0.4
+    else:
+        threshold = 1.0
     
     df_slopes['Trend'] = df_slopes['slope'].apply(lambda x: categorize_slope_trend(x, threshold))
 
     # Kolommen voor de layout
     col1, col2 = st.columns([1, 2])
     with col1:
-        fig_pie = px.pie(df_slopes, names='Trend', title="Verdeling Trends (Aantal Locaties)", 
+        fig_pie = px.pie(df_slopes, names='Trend', title="Trends meetlocaties per geselecteerd waterlichaam", 
                          color='Trend',
                          color_discrete_map={'Verbeterend ↗️': 'green', 'Verslechterend ↘️': 'red', 'Stabiel ➡️': 'grey'})
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col2:
         # Dataframe tonen met opmaak
-        st.write(f"**Detailtabel (Locaties met >={MIN_JAREN} jaar data)**")
+        st.write(f"**Detailtabel (meetlocaties met >={MIN_JAREN} jaar data)**")
         st.dataframe(
             df_slopes.sort_values('slope', ascending=False).style.background_gradient(subset=['slope'], cmap='RdYlGn')
             .format({'slope': "{:.4f}", 'n_jaren': "{:.0f}"}), # Format slope op 4 decimalen, jaren als geheel getal
@@ -134,7 +138,7 @@ else:
 
 # --- 3. GEOGRAFISCHE PATROON HERKENNING (PYDECK) ---
 st.divider()
-st.subheader("Geografische Patroonanalyse")
+st.subheader("Geografische patroonanalyse")
 
 # Data voorbereiding voor de kaart: Aangepaste logica voor soortenrijkdom vs andere metrieken
 if selected_metric == 'soort_count':
@@ -163,8 +167,8 @@ col_mode, col_legenda = st.columns([2, 1])
 
 with col_mode:
     map_mode = st.radio(
-        "Selecteer Analyse Modus:",
-        ["⏱️ Tijdlijn Animatie (Absoluut)", "⚖️ Verschil Modus (Jaar A vs Jaar B)"],
+        "Selecteer analysemodus:",
+        ["⏱️ Tijdlijn animatie", "⚖️ Verschilmodus (jaar A vs jaar B)"],
         horizontal=True
     )
 
@@ -251,9 +255,9 @@ if "Verschil" in map_mode:
         st.markdown("""
             <div style="background-color: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; border: 1px solid #ddd; margin-bottom: 10px;">
                 <strong>Legenda (Verschil)</strong><br>
-                <span style='color:green'>●</span> Verbetering (> +0.5)<br>
+                <span style='color:green'>●</span> Verbetering<br>
                 <span style='color:grey'>●</span> Stabiel<br>
-                <span style='color:red'>●</span> Verslechtering (< -0.5)
+                <span style='color:red'>●</span> Verslechtering<br>
             </div>
             """, unsafe_allow_html=True)
 
@@ -269,7 +273,7 @@ else:
         play_btn = st.button("▶️ Afspelen")
     
     with col_slider:
-        selected_year = st.slider("Selecteer Jaar", min_value=min(available_years), max_value=max(available_years), value=min(available_years))
+        selected_year = st.slider("Selecteer jaar", min_value=min(available_years), max_value=max(available_years), value=min(available_years))
 
     # Animatie Logica
     if play_btn:
@@ -299,13 +303,13 @@ else:
 
 # --- 4. VOOR / NA VERGELIJKING ---
 st.divider()
-st.subheader("Voor / Na Vergelijking")
+st.subheader("Vergelijking versus een historisch meetjaar")
 available_years = sorted(df_filtered['jaar'].unique())
 
 if len(available_years) >= 2:
     c_year1, c_year2 = st.columns(2)
-    year_start = c_year1.selectbox("Referentiejaar (Voor)", available_years, index=0)
-    year_end = c_year2.selectbox("Vergelijkingsjaar (Na)", available_years, index=len(available_years)-1)
+    year_start = c_year1.selectbox("Referentiejaar", available_years, index=0)
+    year_end = c_year2.selectbox("Vergelijkingsjaar", available_years, index=len(available_years)-1)
 
     df_compare = df_trend[df_trend['jaar'].isin([year_start, year_end])]
 

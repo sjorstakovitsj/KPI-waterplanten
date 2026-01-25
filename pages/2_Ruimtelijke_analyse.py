@@ -5,10 +5,10 @@ import folium
 from streamlit_folium import st_folium
 from utils import load_data, add_species_group_columns, create_map, get_sorted_species_list
 
-st.set_page_config(layout="wide", page_title="Ruimtelijke Analyse")
+st.set_page_config(layout="wide", page_title="Ruimtelijke analyse")
 
-st.title("🗺️ Ruimtelijke Analyse")
-st.markdown("Vergelijk de vegetatieontwikkeling met de abiotische condities.")
+st.title("🗺️ Ruimtelijke analyse")
+st.markdown("Vergelijk de vegetatieontwikkeling met diepte en doorzicht.")
 
 # --- DATA INLADEN ---
 df = load_data()
@@ -22,12 +22,12 @@ if df.empty:
 
 # 1. Jaar Filter
 all_years = sorted(df['jaar'].dropna().unique(), reverse=True)
-selected_year = st.sidebar.selectbox("Selecteer Jaar", all_years)
+selected_year = st.sidebar.selectbox("Selecteer jaar", all_years)
 
 # 2. Project Filter
 all_projects = sorted(df['Project'].dropna().unique())
 selected_projects = st.sidebar.multiselect(
-    "Selecteer Project(en)", 
+    "Selecteer project(en)", 
     options=all_projects, 
     default=all_projects
 )
@@ -47,21 +47,21 @@ if df_filtered.empty:
 df_species_groups = add_species_group_columns(df_filtered)
 
 st.sidebar.markdown("---")
-st.sidebar.header("Kaart Instellingen")
+st.sidebar.header("Kaartinstellingen")
 
 # 3. KEUZE ANALYSE NIVEAU (NIEUWE FUNCTIONALITEIT)
 # Hiermee splitsen we de dropdown om de UI schoon te houden.
 analysis_level = st.sidebar.radio(
-    "Kies Analyse Niveau",
-    options=["Groepen & Aggregaties", "Individuele Soorten"]
+    "Kies analyseniveau",
+    options=["groepen & aggregaties", "individuele soorten"]
 )
 
 selected_coverage_type = None
 
 # A. Logica voor Groepen
-if analysis_level == "Groepen & Aggregaties":
+if analysis_level == "groepen & aggregaties":
     # Optie A1: Totale bedekking
-    opt_general = ["Totale Bedekking"]
+    opt_general = ["totale bedekking"]
     
     # Optie A2: RWS Groeivormen (uit ruwe data waar type='Groep')
     rws_forms = sorted(df_filtered[df_filtered['type'] == 'Groep']['groeivorm'].unique())
@@ -71,7 +71,7 @@ if analysis_level == "Groepen & Aggregaties":
     
     all_options = opt_general + rws_forms + species_groups_list
     selected_coverage_type = st.sidebar.selectbox(
-        "Selecteer Groep",
+        "selecteer groep",
         options=all_options
     )
 
@@ -86,13 +86,13 @@ else:
         st.stop()
         
     selected_coverage_type = st.sidebar.selectbox(
-        "Selecteer Soort",
+        "selecteer soort",
         options=species_list
     )
 
 # 4. Kaartlaag Keuze
 layer_mode = st.sidebar.radio(
-    "Kies Kaartlaag",
+    "kies kaartlaag",
     options=["Vegetatie", "Diepte", "Doorzicht"]
 )
 
@@ -111,9 +111,9 @@ df_locs = df_filtered.groupby(['locatie_id', 'Waterlichaam']).agg({
 df_veg_calc = pd.DataFrame()
 
 # LOGICA SELECTIE:
-if analysis_level == "Groepen & Aggregaties":
+if analysis_level == "groepen & aggregaties":
     
-    if selected_coverage_type == "Totale Bedekking":
+    if selected_coverage_type == "totale bedekking":
         # Gebruik WATPTN kolom
         df_veg_calc = df_filtered.groupby('locatie_id')['totaal_bedekking_locatie'].mean().reset_index()
         df_veg_calc.rename(columns={'totaal_bedekking_locatie': 'waarde_veg'}, inplace=True)

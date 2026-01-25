@@ -6,8 +6,8 @@ from utils import load_data, interpret_soil_state, add_species_group_columns
 
 st.set_page_config(layout="wide", page_title="Groeivormen & Bodem")
 
-st.title("🌱 Groeivormen & Soortgroepen")
-st.markdown("Analyse van vegetatiestructuren. Boven: Functionele groeivormen. Onder: Taxonomische soortgroepen.")
+st.title("🌱 Groeivormen en soortgroepen")
+st.markdown("Analyse van vegetaties. Boven: functionele groeivormen. Onder: taxonomische soortgroepen.")
 
 # --- 1. DATA INLADEN ---
 # We laden de ruwe data. De functie load_data() zorgt al voor de basiskolommen.
@@ -22,12 +22,12 @@ st.sidebar.header("Filters")
 
 # Jaar Filter
 all_years = sorted(df_raw['jaar'].dropna().unique(), reverse=True)
-selected_year = st.sidebar.selectbox("Selecteer Peiljaar", all_years)
+selected_year = st.sidebar.selectbox("Selecteer meetjaar", all_years)
 
 # Project Filter
 all_projects = sorted(df_raw['Project'].dropna().unique())
 selected_projects = st.sidebar.multiselect(
-    "Selecteer Project(en)", 
+    "Selecteer project(en)", 
     options=all_projects, 
     default=all_projects 
 )
@@ -36,7 +36,7 @@ selected_projects = st.sidebar.multiselect(
 # We tonen alleen waterlichamen die voorkomen in de geselecteerde projecten
 available_bodies = sorted(df_raw[df_raw['Project'].isin(selected_projects)]['Waterlichaam'].unique())
 selected_bodies = st.sidebar.multiselect(
-    "Selecteer Waterlichaam / Waterlichamen",
+    "Selecteer waterlichaam / waterlichamen",
     options=available_bodies,
     default=available_bodies
 )
@@ -68,7 +68,7 @@ if not df_rws_codes.empty:
     # We groeperen op jaar en groeivorm.
     # Meestal zijn deze waardes al locatietotalen, dus nemen we het gemiddelde over het gebied.
     df_trend_growth = df_rws_codes.groupby(['jaar', 'groeivorm'])['bedekking_pct'].mean().reset_index()
-    source_label = "Bron: RWS Groepscodes"
+    source_label = "Bron: ruwe data Aquadesk"
     
     # Voor de radar plot (specifiek jaar)
     df_radar_source = df_rws_codes[df_rws_codes['jaar'] == selected_year]
@@ -102,7 +102,7 @@ c1, c2 = st.columns([2, 1])
 GROWTH_ORDER = ['Ondergedoken', 'Drijvend', 'Emergent', 'Draadalgen', 'Kroos', 'FLAB']
 
 with c1:
-    st.subheader(f"Verschuiving in Groeivormen")
+    st.subheader(f"Trend in groeivormen")
     st.caption(f"Methode: {source_label}")
     
     if not df_trend_growth.empty:
@@ -166,6 +166,20 @@ with c2:
         st.plotly_chart(fig_radar, use_container_width=True)
     else:
         st.info(f"Geen data beschikbaar voor radarplot in {selected_year}")
+        
+    with st.expander("ℹ️ Hoe lees ik deze spingrafiek?"):
+        st.markdown("""
+        **Wat wordt er weergegeven?**
+        Deze spingrafiek toont de *relatieve verdeling* van functionele groeivormen. 
+        Hoe verder de punt naar de buitenrand van de cirkel staat, hoe groter het aandeel van die specifieke groeivorm binnen het totale plantenbestand van het geselecteerde jaar.
+
+        **De referentielijn (streefbeeld):**
+        De gestippelde lijn vertegenwoordigt een theoretisch streefbeeld voor een **ecologisch gezond, helder watersysteem**:
+        * **Dominantie van ondergedoken planten (60%);** 
+        * **Beperkt aandeel Drijvend/Emergent (20-15%);**
+        * **Minimaal aandeel Draadalgen (5%).**
+      
+        """)
 
 
 st.divider()
@@ -173,7 +187,7 @@ st.divider()
 # --- 6. LOGICA VOOR SOORTGROEPEN (ONDERSTE GRAFIEK) ---
 # Doel: Taxonomische groepen tonen (Chariden, etc.). Hier MOETEN we de RWS-codes negeren.
 
-st.subheader("🌿 Samenstelling Soortgroepen (Relatief)")
+st.subheader("🌿 Samenstelling soortgroepen (relatief)")
 
 # A. Data voorbereiden via de utility functie
 # Deze functie voegt 'soortgroep' toe. 
@@ -208,7 +222,7 @@ else:
         x='jaar',
         y='percentage_relatief',
         color='soortgroep',
-        title='Relatieve samenstelling soortgroepen per jaar (exclusief algemene groeivormen)',
+        title='Relatieve samenstelling soortgroepen per jaar (excl. algemene groeivormen)',
         labels={
             'percentage_relatief': 'Aandeel (%)', 
             'jaar': 'Jaar',
@@ -222,7 +236,7 @@ else:
     st.plotly_chart(fig_stack, use_container_width=True)
 
     # D. Detail "Overig"
-    with st.expander("🔍 Analyse 'Overig / Individueel' (Soorten die nog niet zijn ingedeeld)"):
+    with st.expander("🔍 Analyse 'overig / individueel' (soorten die nog niet zijn ingedeeld)"):
         df_overig = df_species_mapped[df_species_mapped['soortgroep'] == 'Overig / Individueel']
         if not df_overig.empty:
             missing_stats = df_overig.groupby('soort').agg(
@@ -234,7 +248,7 @@ else:
             st.success("Alle aangetroffen soorten zijn succesvol ingedeeld in een groep!")
             
     # --- 6E. TOELICHTING SOORTGROEPEN (EXPLAINER) ---
-with st.expander("ℹ️ Toelichting op de Soortgroepen"):
+with st.expander("ℹ️ Toelichting op de soortgroepen"):
     st.write("Hieronder vind je een beschrijving van de verschillende ecologische soortgroepen die in de grafiek worden getoond. Bron: waterplanten en waterkwaliteit, van Geest, G. et al.")
     
     # Maak kolommen voor een mooie layout of gebruik tabs

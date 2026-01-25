@@ -80,56 +80,6 @@ def determine_waterbody(meetobject_code):
             return name
     return str(meetobject_code)
 
-def get_eco_details(species_name, param_code):
-    """
-    Bepaalt Eco-score en Indicator categorie.
-    """
-    groeivorm = 'Overig'
-    score = 5 # Neutraal (default)
-    indicator = 'Algemeen'
-
-    if param_code in GROWTH_FORM_MAPPING:
-        groeivorm = GROWTH_FORM_MAPPING[param_code]
-        if groeivorm == 'Ondergedoken': score = 7
-        elif groeivorm == 'Drijvend': score = 5
-        elif groeivorm == 'Draadalgen': score = 2
-        return groeivorm, 'Groep', score
-
-    lower_species = str(species_name).lower()
-    
-    if 'chara' in lower_species or 'kranswier' in lower_species:
-        groeivorm = 'Ondergedoken'
-        indicator = 'Heldere wateren'
-        score = 8
-    elif 'potamogeton' in lower_species or 'fonteinkruid' in lower_species:
-        groeivorm = 'Ondergedoken'
-        indicator = 'Matig nutrienten'
-        score = 7
-    elif 'elodea' in lower_species or 'waterpest' in lower_species:
-        groeivorm = 'Ondergedoken'
-        indicator = 'Hoge nutrienten'
-        score = 4
-    elif 'nuphar' in lower_species or 'nymphaea' in lower_species:
-        groeivorm = 'Drijvend'
-        indicator = 'Slib/Stabiel'
-        score = 6
-    elif 'ceratophyllum' in lower_species or 'hoornblad' in lower_species:
-        groeivorm = 'Ondergedoken'
-        indicator = 'Hoge nutrienten'
-        score = 4
-    elif 'draad' in lower_species or 'alg' in lower_species:
-        groeivorm = 'Draadalgen'
-        indicator = 'Verstoring'
-        score = 2
-    elif 'riet' in lower_species or 'phragmites' in lower_species:
-        groeivorm = 'Emergent'
-        indicator = 'Oever'
-        score = 6
-    
-    return groeivorm, indicator, score
-
-# --- NIEUWE LOGICA VOOR SOORTGROEPEN (CORRECTIE) ---
-
 def get_species_group_mapping():
     """
     Retourneert een dictionary die Latijnse namen mapt naar de gevraagde soortgroepen.
@@ -273,8 +223,13 @@ def get_species_group_mapping():
 def determine_group(row, mapping_dict):
     """
     Hulpfunctie om de groep te bepalen.
-    CHECK: Kijkt naar 'soort' OF 'Parameter' kolom.
+    CHECK: Kijkt naar 'soort', 'Parameter' en 'Grootheid'.
     """
+    # Eerst checken op kenmerkende soorten o.b.v. Grootheid AANWZHD
+    grootheid = row.get('Grootheid', '')
+    if grootheid == 'AANWZHD':
+        return 'Kenmerkende soort (N2000)'
+
     # Haal de waarde op uit 'soort' (nieuwe naam) of 'Parameter' (fallback)
     param_val = row.get('soort', row.get('Parameter', ''))
     param = str(param_val).strip()
@@ -292,7 +247,6 @@ def determine_group(row, mapping_dict):
         return mapping_dict[genus]
     
     # 3. Check bestaande mapping (GROWTH_FORM_MAPPING)
-    # Als param in GROWTH_FORM_MAPPING zit, proberen we daaruit af te leiden
     if 'GROWTH_FORM_MAPPING' in globals() and param in globals()['GROWTH_FORM_MAPPING']:
         original_group = globals()['GROWTH_FORM_MAPPING'][param]
         if 'draadalg' in str(original_group).lower():
@@ -323,6 +277,8 @@ def add_species_group_columns(df):
     df['soortgroep'] = df.apply(lambda row: determine_group(row, mapping), axis=1)
     
     # --- STAP 3: PERCENTAGES ---
+    # Als Grootheid AANWZHD is, is de waarde vaak 1.0 (aanwezig) of 0.0 (afwezig).
+    # We willen dit wel parsen, maar bewust zijn dat dit geen percentage bedekking is.
     target_col = 'bedekking_pct'
     if target_col not in df.columns:
         target_col = 'waarde_bedekking' if 'waarde_bedekking' in df.columns else 'WaardeGemeten'
@@ -357,6 +313,7 @@ def get_sorted_species_list(df):
 def load_data():
     """
     Laadt data, splitst WATPTN van soorten, en merged alles terug.
+    Inclusief verwerking van Grootheid 'AANWZHD' voor N2000 soorten.
     """
     try:
         df_raw = pd.read_csv(FILE_PATH, sep=None, engine='python', encoding='utf-8-sig')
@@ -387,6 +344,7 @@ def load_data():
         df_raw['lat'] = [c[2] for c in coords]
         df_raw['lon'] = [c[3] for c in coords]
 
+    # --- ABIOTIEK (Diepte, Zicht) ---
     df_abiotic = df_raw[df_raw['Grootheid'].isin(['DIEPTE', 'ZICHT'])].copy()
     if not df_abiotic.empty:
         df_env = df_abiotic.pivot_table(
@@ -408,19 +366,29 @@ def load_data():
     else:
         df_env['doorzicht_m'] = np.nan
 
+    # --- TOTALE BEDEKKING (WATPTN) ---
     df_total = df_raw[df_raw['Parameter'] == 'WATPTN'].copy()
     df_total = df_total[['CollectieReferentie', 'WaardeGemeten']].rename(
         columns={'WaardeGemeten': 'totaal_bedekking_locatie'}
     )
     df_total = df_total.groupby('CollectieReferentie', as_index=False).mean()
 
+    # --- INDIVIDUELE SOORTEN EN KENMERKENDE SOORTEN ---
+    # Hier filteren we op BEDKG (Bedekking) ÉN AANWZHD (Aanwezigheid)
     df_bedkg = df_raw[
-        (df_raw['Grootheid'] == 'BEDKG') & 
+        (df_raw['Grootheid'].isin(['BEDKG', 'AANWZHD'])) & 
         (df_raw['Parameter'] != 'WATPTN')
     ].copy()
 
     def classify_row(row):
         param = row['Parameter']
+        grootheid = row['Grootheid']
+        
+        # Mapping voor Kenmerkende Soorten (N2000)
+        if grootheid == 'AANWZHD':
+            return 'Kenmerkende soort (N2000)', 'Soort'
+            
+        # Mapping voor Groeivormen
         if param in GROWTH_FORM_MAPPING:
             return GROWTH_FORM_MAPPING[param], 'Groep'
         else:
@@ -430,23 +398,18 @@ def load_data():
     df_bedkg['groeivorm'] = [x[0] for x in classificatie]
     df_bedkg['type'] = [x[1] for x in classificatie]
 
+    # Mergen van alle data
     df_merged = pd.merge(df_bedkg, df_env, on='CollectieReferentie', how='left')
-    df_merged = pd.merge(df_merged, df_total, on='CollectieReferentie', how='left')
-
-    eco_details = df_merged.apply(lambda row: get_eco_details(row['Parameter'], row['Parameter']), axis=1)
-    
-    df_merged['groeivorm'] = [x[0] for x in eco_details]
-    df_merged['indicator_cat'] = [x[1] for x in eco_details]
-    df_merged['eco_score'] = [x[2] for x in eco_details]
+    df_merged = pd.merge(df_merged, df_total, on='CollectieReferentie', how='left')   
     
     final_df = df_merged.rename(columns={
         'MeetObject': 'locatie_id',
         'Parameter': 'soort',
-        'WaardeGemeten': 'bedekking_pct',
-        'WaardeGemeten': 'waarde_bedekking',
+        'WaardeGemeten': 'waarde_bedekking', # Tijdelijke rename, wordt zo gefixed
         'EenheidGemeten': 'eenheid'
     })
     
+    # Consistent maken van bedekkingskolom
     if 'waarde_bedekking' in final_df.columns:
         final_df['bedekking_pct'] = final_df['waarde_bedekking']
 
@@ -455,7 +418,7 @@ def load_data():
         'soort', 'bedekking_pct', 'waarde_bedekking', 'totaal_bedekking_locatie', 
         'diepte_m', 'doorzicht_m', 
         'lat', 'lon', 'x_rd', 'y_rd',
-        'groeivorm', 'type', 'indicator_cat', 'eco_score'
+        'groeivorm', 'type', 'Grootheid' # Grootheid toegevoegd om onderscheid te kunnen maken
     ]
     
     for col in cols_to_keep:
