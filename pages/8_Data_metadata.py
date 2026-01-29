@@ -21,7 +21,7 @@ st.divider()
 
 # --- 2. MEETGATEN ANALYSE (HEATMAP) ---
 st.subheader("📅 Tijdruimtelijke meetinspanning")
-st.markdown("Blauwe vlakken geven aan dat er gemeten is. Witte gaten zijn ontbrekende jaren per locatie.")
+st.markdown("Blauwe vlakken geven aan dat er gemeten is. Witte gaten zijn ontbrekende jaren per locatie. **NB.** dit zijn niet alle meetlocaties.")
 
 # Pivot table: Index=Locatie, Kolom=Jaar, Waarde=Aantal metingen (of aanwezigheid)
 coverage_matrix = df.groupby(['locatie_id', 'jaar']).size().unstack(fill_value=0)

@@ -9,7 +9,7 @@ import folium
 import re
 
 # --- CONFIGURATIE ---
-FILE_PATH = "AquaDeskMeasurementExport_RWS_20251227211036.csv"
+FILE_PATH = "AquaDeskMeasurementExport_RWS_20260129204403.csv"
 
 # --- MAPPINGS ---
 PROJECT_MAPPING = {
@@ -590,57 +590,56 @@ def get_color_transparency(value):
 
 def create_map(dataframe, mode, label_veg="Vegetatie"):
     """
-    Genereert een Folium kaart.
-    Argumenten:
-    - dataframe: Pandas DataFrame met kolom 'lat', 'lon', 'waarde_veg', 'diepte_m', 'doorzicht_m'
-    - mode: De visualisatiemodus ("Vegetatie", "Diepte", "Doorzicht")
-    - label_veg: Label voor de vegetatie tooltip (default: "Vegetatie")
+    Genereert een Folium kaart (OSM-tiles).
+
+    Args:
+        dataframe: Pandas DataFrame met kolommen 'lat', 'lon', 'waarde_veg', 'diepte_m', 'doorzicht_m', 'Waterlichaam', 'locatie_id'
+        mode: "Vegetatie", "Diepte" of "Doorzicht"
+        label_veg: Label voor de hoofdwaarde in de tooltip
     """
     # Centreer kaart
     if dataframe['lat'].isnull().all():
-        center_lat, center_lon = 52.5, 5.5 # Fallback NL
+        center_lat, center_lon = 52.5, 5.5  # Fallback NL
     else:
         center_lat = dataframe['lat'].mean()
         center_lon = dataframe['lon'].mean()
-    
+
     m = folium.Map(location=[center_lat, center_lon], zoom_start=10, control_scale=True)
-    
+
     for row in dataframe.itertuples():
-        # Tooltip altijd compleet
+        # Bepaal hoofdwaarde + kleur + radius door modus
+        radius = 5
+        fill_opacity = 0.8
+        if mode == "Vegetatie":
+            val = getattr(row, 'waarde_veg', 0.0)
+            color = get_color_vegetation(val)
+            main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
+            radius = 4 + (min(val, 100) / 100 * 6) if val > 0 else 4
+        elif mode == "Diepte":
+            val = getattr(row, 'diepte_m', float('nan'))
+            color = get_color_depth(val)
+            main_line = f"<b>🌊 Diepte:</b> {val:.2f} m"
+        else:  # Doorzicht
+            val = getattr(row, 'doorzicht_m', float('nan'))
+            color = get_color_transparency(val)
+            main_line = f"<b>👁️ Doorzicht:</b> {val:.2f} m"
+
+        depth_line = f"<b>🌊 Diepte:</b> {getattr(row, 'diepte_m', float('nan')):.2f} m"
+        trans_line = f"<b>👁️ Doorzicht:</b> {getattr(row, 'doorzicht_m', float('nan')):.2f} m"
+
         tooltip_html = (
             f"<b>Locatie:</b> {row.locatie_id}<br>"
             f"<b>Water:</b> {row.Waterlichaam}<br>"
-            f"<b>🌱 {label_veg}:</b> {row.waarde_veg:.1f}%<br>"
-            f"<b>🌊 Diepte:</b> {row.diepte_m:.2f} m<br>"
-            f"<b>👁️ Doorzicht:</b> {row.doorzicht_m:.2f} m"
+            f"{main_line}<br>"
+            f"{depth_line}<br>"
+            f"{trans_line}"
         )
-        
-        # Bepaal waarde en kleur op basis van modus
-        radius = 5 # Standaard grootte
-        fill_opacity = 0.8
-        
-        if mode == "Vegetatie":
-            val = row.waarde_veg
-            color = get_color_vegetation(val)
-            # Optioneel: puntjes iets groter maken als er veel vegetatie is
-            if val > 0:
-                radius = 4 + (min(val, 100) / 100 * 6) # Max radius 10
-            else:
-                radius = 4
-            
-        elif mode == "Diepte":
-            val = row.diepte_m
-            color = get_color_depth(val)
-            
-        elif mode == "Doorzicht":
-            val = row.doorzicht_m
-            color = get_color_transparency(val)
-        
-        if pd.notna(row.lat) and pd.notna(row.lon):
+
+        if getattr(row, 'lat') is not None and getattr(row, 'lon') is not None:
             folium.CircleMarker(
                 location=[row.lat, row.lon],
                 radius=radius,
-                color='#333333',     # Dun grijs randje om de stip
+                color='#333333',  # rand
                 weight=1,
                 fill=True,
                 fill_color=color,

@@ -176,8 +176,8 @@ with c2:
         **De referentielijn (streefbeeld):**
         De gestippelde lijn vertegenwoordigt een theoretisch streefbeeld voor een **ecologisch gezond, helder watersysteem**:
         * **Dominantie van ondergedoken planten (60%);** 
-        * **Beperkt aandeel Drijvend/Emergent (20-15%);**
-        * **Minimaal aandeel Draadalgen (5%).**
+        * **Beperkt aandeel drijvend/emergent (15-20%);**
+        * **Maximaal aandeel draadalgen (5%).**
       
         """)
 

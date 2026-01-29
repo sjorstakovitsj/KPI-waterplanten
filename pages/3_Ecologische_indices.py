@@ -85,7 +85,7 @@ if not df['jaar'].empty:
         st.warning("Geen data gevonden voor deze filtercombinatie.")
 
 # --- HEATMAP ---
-st.subheader("Soortenaanwezigheid heatmap (top 100)")
+st.subheader("Soortenaanwezigheid heatmap (top 50)")
 
 if not df_species_only.empty:
     # 1. Bereken de gemiddelde bedekking per soort over alle jaren om de 'Top 100' te bepalen
@@ -93,7 +93,7 @@ if not df_species_only.empty:
         df_species_only.groupby('soort')['bedekking_pct']
         .mean()
         .sort_values(ascending=False)
-        .head(100)
+        .head(50)
         .index
     )
 
@@ -114,7 +114,7 @@ if not df_species_only.empty:
             heatmap_matrix, 
             color_continuous_scale='Greens',
             aspect="auto",
-            title="Ontwikkeling bedekking (top 100 meest voorkomende soorten)",
+            title="Ontwikkeling bedekking (top 50 meest voorkomende soorten)",
             labels=dict(x="Jaar", y="Soort", color="Gem. Bedekking (%)")
         )
         
