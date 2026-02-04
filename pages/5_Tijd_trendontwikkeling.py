@@ -4,17 +4,16 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import pydeck as pdk
-import time
 from streamlit.components.v1 import html
 
 from utils import (
     load_data,
-    get_color_diff,
     categorize_slope_trend,
-    create_year_map_deck,
     get_sorted_species_list,
     create_map,
+    df_to_geojson_points,
+    render_swipe_map_html,
+
 )
 
 st.set_page_config(layout="wide")
@@ -103,68 +102,154 @@ else:
         .reset_index(name='waarde')
     )
 
-# -------------------------------------------------------------
-# 0) Kaart (OpenStreetMap) – vóór regressieanalyse
-# -------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 0) Kaart (Swipe Map) – vervangt “resultaten voor een gekozen jaar”
+# ---------------------------------------------------------------------------
 st.subheader("Kaart – resultaten voor een gekozen jaar")
+years_available = sorted([int(y) for y in df_filtered["jaar"].dropna().unique()])
 
-years_available = sorted([int(y) for y in df_filtered['jaar'].dropna().unique()])
 if not years_available:
     st.info("Er zijn geen jaartallen beschikbaar om op de kaart te tonen.")
 else:
-    c1, c2 = st.columns([3, 1])
-    with c2:
-        y_min, y_max = int(min(years_available)), int(max(years_available))
-        if y_min == y_max:
-            # Eén jaar: geen slider nodig
-            yr = y_min
-            st.caption(f"Enkel jaar beschikbaar: **{yr}**")
-        else:
-            yr = st.slider(
-                "Jaar voor kaartweergave",
-                min_value=y_min, max_value=y_max, value=y_min
-            )
+    # --- 1) Bepaal defaults: twee meest recente jaren binnen de HUIDIGE selectie ---
+    
+    if selected_metric == "soort_count":
+        df_map_source = (
+            df_filtered.groupby(["locatie_id", "jaar"])
+            .agg({"lat": "first", "lon": "first", "soort": "nunique"})
+            .reset_index()
+            .rename(columns={"soort": "soort_count"})
+        )
+    else:
+        df_map_source = (
+            df_filtered.groupby(["locatie_id", "jaar"])
+            .agg({"lat": "first", "lon": "first", selected_metric: "mean"})
+            .reset_index()
+        )
 
-    with c1:
-        # Aggregatie per locatie in gekozen jaar
-        df_y = df_filtered[df_filtered['jaar'] == yr].copy()
-        agg_cols = {
-            'lat': 'first', 'lon': 'first', 'Waterlichaam': 'first',
-            'diepte_m': 'mean', 'doorzicht_m': 'mean'
+    df_map_source = df_map_source.dropna(subset=["lat", "lon"])
+
+    if len(years_available) >= 2:
+        default_left = years_available[-2]
+        default_right = years_available[-1]
+    else:
+        default_left = years_available[0]
+        default_right = years_available[0]
+
+    # --- 2) Maak een context-id die uniek is voor de huidige selectie ---
+    # Multi-waterbody: sorteert zodat volgorde in multiselect geen invloed heeft
+    bodies_key = "|".join(sorted(selected_bodies)) if selected_bodies else "ALL"
+    species_key = selected_species if (selected_species and selected_species != "— Alle soorten —") else "ALLSPECIES"
+    context_id = f"bodies={bodies_key}__metric={selected_metric}__species={species_key}"
+
+    # --- 3) Init/restore per context ---
+    if "swipe_years_by_context" not in st.session_state:
+        st.session_state["swipe_years_by_context"] = {}
+
+    if context_id not in st.session_state["swipe_years_by_context"]:
+        # eerste keer voor deze selectie: pak defaults (laatste twee)
+        st.session_state["swipe_years_by_context"][context_id] = {
+            "left": default_left,
+            "right": default_right,
         }
 
-        if selected_metric == 'soort_count':
-            # Soortenrijkdom per locatie in jaar
-            species_count = (
-                df_y.groupby('locatie_id')['soort']
-                .nunique()
-                .rename('waarde_veg')
-            )
-            base = df_y.groupby('locatie_id').agg(agg_cols)
-            df_map_loc = base.join(species_count).reset_index()
-            mode = "Vegetatie"
-            label = "Soortenrijkdom (aantal)"
+    # --- 4) Valideer: als jaren niet meer bestaan (door andere waterlichamen), herstel defaults ---
+    stored_left = st.session_state["swipe_years_by_context"][context_id]["left"]
+    stored_right = st.session_state["swipe_years_by_context"][context_id]["right"]
+
+    if stored_left not in years_available:
+        stored_left = default_left
+    if stored_right not in years_available:
+        stored_right = default_right
+
+    # Zorg dat left != right als dat kan
+    if stored_left == stored_right and len(years_available) >= 2:
+        stored_left = years_available[-2]
+        stored_right = years_available[-1]
+
+    # --- 5) UI: selectboxen met defaults uit context ---
+    c_left, c_right = st.columns([1, 1])
+
+    with c_left:
+        year_left = st.selectbox(
+            "Jaar links",
+            years_available,
+            index=years_available.index(stored_left),
+            key=f"swipe_year_left__{context_id}",
+        )
+
+    with c_right:
+        year_right = st.selectbox(
+            "Jaar rechts",
+            years_available,
+            index=years_available.index(stored_right),
+            key=f"swipe_year_right__{context_id}",
+        )
+
+    # --- 6) Schrijf de keuze terug naar context state ---
+    st.session_state["swipe_years_by_context"][context_id]["left"] = year_left
+    st.session_state["swipe_years_by_context"][context_id]["right"] = year_right
+
+    if year_left == year_right:
+        st.warning("Kies twee verschillende jaren voor de swipe‑vergelijking.")
+    else:
+        df_left = df_map_source[df_map_source["jaar"] == year_left][
+            ["locatie_id", "lat", "lon", selected_metric]
+        ].copy()
+
+        df_right = df_map_source[df_map_source["jaar"] == year_right][
+            ["locatie_id", "lat", "lon", selected_metric]
+        ].copy()
+
+        gj_left = df_to_geojson_points(df_left, value_col=selected_metric, id_col="locatie_id")
+        gj_right = df_to_geojson_points(df_right, value_col=selected_metric, id_col="locatie_id")
+
+        # bounds (links + rechts samen) -> autozoom
+        df_bounds = pd.concat([df_left, df_right], ignore_index=True).dropna(subset=["lat", "lon"])
+        if len(df_bounds) >= 2:
+            bounds = [
+                float(df_bounds["lon"].min()),
+                float(df_bounds["lat"].min()),
+                float(df_bounds["lon"].max()),
+                float(df_bounds["lat"].max()),
+            ]
         else:
-            base_vals = (
-                df_y.groupby('locatie_id')[selected_metric]
-                .mean()
-                .rename('waarde_veg')
-            )
-            base = df_y.groupby('locatie_id').agg(agg_cols)
-            df_map_loc = base.join(base_vals).reset_index()
+            bounds = None
 
-            if selected_metric == 'bedekking_pct':
-                mode = "Vegetatie"
-                label = f"Bedekking (%) – {selected_species}" if species_is_selected else "Bedekking (%)"
-            elif selected_metric == 'diepte_m':
-                mode = "Diepte"
-                label = "Diepte (m)"
-            else:
-                mode = "Doorzicht"
-                label = "Doorzicht (m)"
+        # fallback center/scale
+        center_lat = float(df_map_source["lat"].mean())
+        center_lon = float(df_map_source["lon"].mean())
+        min_val = float(df_map_source[selected_metric].min())
+        max_val = float(df_map_source[selected_metric].max())
 
-        osm_map = create_map(df_map_loc, mode=mode, label_veg=label)
-        html(osm_map._repr_html_(), height=600)
+        swipe_html = render_swipe_map_html(
+            geojson_left=gj_left,
+            geojson_right=gj_right,
+            year_left=year_left,
+            year_right=year_right,
+            metric_label=selected_metric_label,
+            min_val=min_val,
+            max_val=max_val,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            zoom=9.0,
+            height_px=650,
+            bounds=bounds,
+        )
+        html(swipe_html, height=670)
+
+
+    # Eenvoudige legenda (zelfde schaal links en rechts)
+    st.markdown(f"""
+        <div style="display:flex;align-items:center;background-color: rgba(255,255,255,0.85);
+                    padding:10px;border-radius:6px;border:1px solid #ddd;margin-top:6px;">
+            <div style="margin-right:10px;"><strong>Legenda ({selected_metric_label}):</strong></div>
+            <div style="background: linear-gradient(90deg, red, green); width: 160px; height: 14px; border: 1px solid #ccc;"></div>
+            <div style="margin-left:10px; font-size: 0.9em;">
+                {min_val:.1f} (Laag) → {max_val:.1f} (Hoog)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 1) Tijdreeks trendlijnen
@@ -249,175 +334,43 @@ else:
     st.warning(f"Geen locaties gevonden met minimaal {MIN_JAREN} jaar aan meetgegevens in de huidige selectie.")
 
 # -------------------------------------------------------------
-# 3) Geografische patroonherkenning (Pydeck)
-# -------------------------------------------------------------
-st.divider()
-st.subheader("Geografische patroonanalyse (Pydeck)")
-
-# Data voorbereiding voor de kaart
-if selected_metric == 'soort_count':
-    df_map_source = df_filtered.groupby(['locatie_id', 'jaar']).agg({
-        'lat': 'first',
-        'lon': 'first',
-        'soort': 'nunique'
-    }).reset_index().rename(columns={'soort': 'soort_count'})
-else:
-    df_map_source = df_filtered.groupby(['locatie_id', 'jaar']).agg({
-        'lat': 'first',
-        'lon': 'first',
-        selected_metric: 'mean'
-    }).reset_index()
-
-df_map_source = df_map_source.dropna(subset=['lat', 'lon'])
-
-col_mode, col_legenda = st.columns([2, 1])
-with col_mode:
-    map_mode = st.radio(
-        "Selecteer analysemodus:",
-        ["⏱️ Tijdlijn animatie", "⚖️ Verschilmodus (jaar A vs jaar B)"],
-        horizontal=True
-    )
-
-map_container = st.empty()
-legend_container = st.empty()
-
-if "Verschil" in map_mode:
-    available_years = sorted(df_map_source['jaar'].unique())
-    if len(available_years) < 2:
-        st.warning("Onvoldoende jaren voor een vergelijking.")
-    else:
-        start_y, end_y = st.select_slider(
-            "Vergelijk Jaar A met Jaar B",
-            options=available_years,
-            value=(available_years[0], available_years[-1])
-        )
-
-        df_start = df_map_source[df_map_source['jaar'] == start_y].copy()
-        df_end = df_map_source[df_map_source['jaar'] == end_y].copy()
-
-        df_diff = pd.merge(
-            df_start[['locatie_id', 'lat', 'lon', selected_metric]],
-            df_end[['locatie_id', selected_metric]],
-            on='locatie_id',
-            suffixes=('_start', '_end')
-        )
-        if df_diff.empty:
-            st.error(f"Geen locaties gevonden die data hebben in zowel {start_y} als {end_y}.")
-        else:
-            df_diff['waarde_start'] = df_diff[f'{selected_metric}_start'].round(1)
-            df_diff['waarde_end'] = df_diff[f'{selected_metric}_end'].round(1)
-            df_diff['delta'] = (df_diff['waarde_end'] - df_diff['waarde_start']).round(1)
-            df_diff['color'] = df_diff['delta'].apply(get_color_diff)
-            df_diff['radius'] = 150
-
-            layer = pdk.Layer(
-                "ScatterplotLayer",
-                df_diff,
-                get_position=["lon", "lat"],
-                get_fill_color="color",
-                get_radius="radius",
-                pickable=True,
-                opacity=0.8,
-                stroked=True,
-                filled=True,
-                line_width_min_pixels=1,
-                get_line_color=[0, 0, 0],
-            )
-            tooltip = {
-                "html": f"""
-<b>Locatie:</b> {{locatie_id}}<br/>
-<b>{start_y}:</b> {{waarde_start}}<br/>
-<b>{end_y}:</b> {{waarde_end}}<br/>
-<hr>
-<b>Verschil:</b> {{delta}}
-""",
-                "style": {"backgroundColor": "steelblue", "color": "white"}
-            }
-            view_state = pdk.ViewState(
-                latitude=df_diff['lat'].mean(),
-                longitude=df_diff['lon'].mean(),
-                zoom=9
-            )
-            r = pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="light")
-            map_container.pydeck_chart(r)
-
-            st.markdown("""
-<div style="background-color: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; border: 1px solid #ddd; margin-bottom: 10px;">
-<strong>Legenda (Verschil)</strong><br>
-<span style='color:green'>●</span> Verbetering<br>
-<span style='color:grey'>●</span> Stabiel<br>
-<span style='color:red'>●</span> Verslechtering<br>
-</div>
-""", unsafe_allow_html=True)
-else:
-    # --- ANIMATIE / TIJDLIJN MODUS ---
-    available_years = sorted(df_map_source['jaar'].unique())
-
-    if len(available_years) == 0:
-        st.info("Geen jaren beschikbaar voor de tijdlijn.")
-    elif len(available_years) == 1:
-        # Eén jaar: render statisch zonder slider
-        min_val = df_map_source[selected_metric].min()
-        max_val = df_map_source[selected_metric].max()
-        selected_year = int(available_years[0])
-        deck = create_year_map_deck(df_map_source, selected_year, selected_metric, min_val, max_val)
-        map_container.pydeck_chart(deck)
-        st.caption(f"Enkel jaar beschikbaar: **{selected_year}**")
-    else:
-        min_val = df_map_source[selected_metric].min()
-        max_val = df_map_source[selected_metric].max()
-
-        # Controls
-        col_play, col_slider = st.columns([0.2, 0.8])
-        with col_play:
-            play_btn = st.button("▶️ Afspelen")
-        with col_slider:
-            selected_year = st.slider(
-                "Selecteer jaar",
-                min_value=int(min(available_years)),
-                max_value=int(max(available_years)),
-                value=int(min(available_years))
-            )
-
-        # Animatie Logica
-        if play_btn:
-            for y in available_years:
-                deck = create_year_map_deck(df_map_source, y, selected_metric, min_val, max_val)
-                map_container.pydeck_chart(deck)
-                legend_container.markdown(f"### Huidig Jaar: {y}")
-                time.sleep(2.0)
-        else:
-            # Statische weergave gebaseerd op slider
-            deck = create_year_map_deck(df_map_source, selected_year, selected_metric, min_val, max_val)
-            map_container.pydeck_chart(deck)
-            # Legenda voor absolute waarden
-            st.markdown(f"""
-<div style="display: flex; align-items: center; background-color: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px;">
-  <div style="margin-right: 10px;"><strong>Legenda ({selected_metric_label}):</strong></div>
-  <div style="background: linear-gradient(90deg, red, green); width: 150px; height: 20px; border: 1px solid #ccc;"></div>
-  <div style="margin-left: 10px; font-size: 0.8em;">
-    {min_val:.1f} (Laag) ➡️ {max_val:.1f} (Hoog)
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# -------------------------------------------------------------
-# 4) Voor/na vergelijking (balken)
+# 4) Voor/na vergelijking (balken) – default 2 meest recente jaren
 # -------------------------------------------------------------
 st.divider()
 st.subheader("Vergelijking versus een historisch meetjaar")
 
-available_years = sorted(df_filtered['jaar'].dropna().unique())
+available_years = sorted(df_filtered["jaar"].dropna().unique())
+
 if len(available_years) >= 2:
     c_year1, c_year2 = st.columns(2)
-    year_start = c_year1.selectbox("Referentiejaar", available_years, index=0)
-    year_end = c_year2.selectbox("Vergelijkingsjaar", available_years, index=len(available_years)-1)
 
-    df_compare = df_trend[df_trend['jaar'].isin([year_start, year_end])]
+    # defaults: laatste twee
+    default_start = int(available_years[-2])
+    default_end = int(available_years[-1])
+
+    year_start = c_year1.selectbox(
+        "Referentiejaar",
+        available_years,
+        index=available_years.index(default_start),
+        key="bar_ref_year",
+    )
+    year_end = c_year2.selectbox(
+        "Vergelijkingsjaar",
+        available_years,
+        index=available_years.index(default_end),
+        key="bar_cmp_year",
+    )
+
+    df_compare = df_trend[df_trend["jaar"].isin([year_start, year_end])]
+
     fig_bar = px.bar(
-        df_compare, x='locatie_id', y='waarde', color=df_compare['jaar'].astype(str),
-        barmode='group', title=f"Vergelijking {year_start} vs {year_end} per locatie",
-        labels={'waarde': selected_metric_label, 'color': 'Jaar'}
+        df_compare,
+        x="locatie_id",
+        y="waarde",
+        color=df_compare["jaar"].astype(str),
+        barmode="group",
+        title=f"Vergelijking {year_start} vs {year_end} per locatie",
+        labels={"waarde": selected_metric_label, "color": "Jaar"},
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 else:

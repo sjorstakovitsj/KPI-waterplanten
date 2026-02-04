@@ -4,9 +4,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import pydeck as pdk
 import folium 
 import re
+import json
 
 # --- CONFIGURATIE ---
 FILE_PATH = "AquaDeskMeasurementExport_RWS_20260129204403.csv"
@@ -490,47 +490,6 @@ def get_color_diff(val):
     else:
         return [128, 128, 128, 100] # Grijs
 
-def create_year_map_deck(df_source, year, metric, min_val, max_val):
-    """
-    Genereert een Pydeck Scatterplot object voor een specifiek jaar.
-    """
-    df_year = df_source[df_source['jaar'] == year].copy()
-    
-    # Afronden voor nette weergave in tooltips
-    df_year[metric] = df_year[metric].round(1)
-    
-    # Kleur berekenen
-    df_year['color'] = df_year[metric].apply(lambda x: get_color_absolute(x, min_val, max_val))
-    
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        df_year,
-        get_position=["lon", "lat"],
-        get_fill_color="color",
-        get_radius=150,
-        pickable=True,
-        opacity=0.8,
-        stroked=True,
-        filled=True,
-        line_width_min_pixels=1,
-        get_line_color=[50, 50, 50],
-    )
-
-    tooltip = {
-            "html": f"<b>Locatie:</b> {{locatie_id}}<br/>"
-                    f"<b>Jaar:</b> {year}<br/>"
-                    f"<b>Waarde:</b> {{{metric}}} %", # Drie accolades nodig door de f-string
-            "style": {"backgroundColor": "steelblue", "color": "white"}
-        }
-
-    view_state = pdk.ViewState(
-        latitude=df_source['lat'].mean(),
-        longitude=df_source['lon'].mean(),
-        zoom=9
-    )
-    
-    return pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="light")
-
 # --- AGGREGATIE EN KPI FUNCTIES (Vanuit 1_Overzicht.py) ---
 
 def get_location_metric_mean(dataframe, metric_col):
@@ -648,3 +607,432 @@ def create_map(dataframe, mode, label_veg="Vegetatie"):
             ).add_to(m)
 
     return m
+
+def df_to_geojson_points(df: pd.DataFrame, value_col: str, id_col: str = "locatie_id"):
+    """
+    Zet punten (lat/lon) om naar een GeoJSON FeatureCollection.
+    Verwacht kolommen: lat, lon, id_col, value_col
+    """
+    features = []
+    for row in df.dropna(subset=["lat", "lon"]).itertuples(index=False):
+        props = {
+            "locatie_id": getattr(row, id_col),
+            "value": float(getattr(row, value_col)) if getattr(row, value_col) is not None else None,
+        }
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(row.lon), float(row.lat)]},
+                "properties": props,
+            }
+        )
+    return {"type": "FeatureCollection", "features": features}
+
+
+
+def render_swipe_map_html(
+    geojson_left: dict,
+    geojson_right: dict,
+    year_left: int,
+    year_right: int,
+    metric_label: str,
+    min_val: float,
+    max_val: float,
+    center_lat: float,
+    center_lon: float,
+    zoom: float = 9.0,
+    height_px: int = 650,
+    bounds=None,  # [min_lon, min_lat, max_lon, max_lat] of None
+):
+    """
+    Rendert een swipe-map met dragbare divider/handle op de kaart zelf (MapLibre in Streamlit html component).
+
+    - Basemap: OpenFreeMap Liberty style URL (direct bruikbaar in MapLibre). [1](https://www.npmjs.com/package/@stadiamaps/maplibre-search-box)
+    - map_left: basemap grijs via setPaintProperty (punten blijven kleur). [2](https://github.com/maptiler/tileserver-gl)[3](https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/c82a783a-9a58-4761-a809-b4c5d90dcd35)
+    - bounds: optional [min_lon, min_lat, max_lon, max_lat] -> fitBounds
+    """
+
+    # OpenFreeMap style URL (vector basemap)
+    style_url = "https://tiles.openfreemap.org/styles/liberty"  # [1](https://www.npmjs.com/package/@stadiamaps/maplibre-search-box)
+
+    left_json = json.dumps(geojson_left)
+    right_json = json.dumps(geojson_right)
+    bounds_json = "null" if bounds is None else json.dumps(bounds)
+
+    # Veilig: als min == max, maak kleine marge zodat interpolate werkt
+    if max_val == min_val:
+        max_val = min_val + 1e-6
+
+    html_str = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+  <style>
+    body {{ margin: 0; padding: 0; }}
+    #wrap {{
+      position: relative;
+      width: 100%;
+      height: {height_px}px;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 1px 10px rgba(0,0,0,0.08);
+      background: #f7f7f7;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }}
+
+    /* Onderliggende kaart (jaar links) */
+    #map_left {{
+      position: absolute;
+      inset: 0;
+    }}
+
+    /* Bovenliggende kaart (jaar rechts) */
+    #map_right {{
+      position: absolute;
+      inset: 0;
+      clip-path: inset(0 0 0 50%);
+    }}
+
+    /* Divider lijn */
+    #divider {{
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 2px;
+      background: rgba(230,230,230,0.95);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+      z-index: 10;
+      cursor: ew-resize;
+    }}
+
+    /* Handle */
+    #handle {{
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 16px;
+      height: 120px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.95);
+      border: 1px solid rgba(0,0,0,0.15);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      z-index: 11;
+      cursor: ew-resize;
+    }}
+
+    /* Jaarlabels */
+    .year-label {{
+      position: absolute;
+      top: 18px;
+      font-size: 44px;
+      font-weight: 700;
+      color: rgba(0,0,0,0.78);
+      text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+      z-index: 12;
+      pointer-events: none;
+    }}
+    #label_left {{ left: 30px; opacity: 0.40; }}
+    #label_right {{ right: 30px; opacity: 0.95; }}
+
+    /* Legenda */
+    #legend {{
+      position: absolute;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
+      width: 520px;
+      max-width: calc(100% - 40px);
+      background: rgba(255,255,255,0.90);
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 12px;
+      padding: 12px 14px;
+      z-index: 12;
+      backdrop-filter: blur(3px);
+    }}
+    #legend .title {{
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }}
+    #legend .bar {{
+      height: 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(0,0,0,0.12);
+      background: linear-gradient(90deg, #d73027 0%, #fee08b 50%, #1a9850 100%);
+    }}
+    #legend .labels {{
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      font-size: 16px;
+      font-weight: 650;
+      color: rgba(0,0,0,0.80);
+    }}
+    #legend .sub {{
+      text-align: center;
+      margin-top: 3px;
+      font-size: 14px;
+      color: rgba(0,0,0,0.60);
+      font-weight: 600;
+    }}
+  </style>
+</head>
+
+<body>
+  <div id="wrap">
+    <div id="map_left"></div>
+    <div id="map_right"></div>
+
+    <div id="divider"></div>
+    <div id="handle"></div>
+
+    <div id="label_left" class="year-label">{year_left}</div>
+    <div id="label_right" class="year-label">{year_right}</div>
+
+    <div id="legend">
+      <div class="title">{metric_label}</div>
+      <div class="bar"></div>
+      <div class="labels"><span>{min_val:.1f}</span><span>{max_val:.1f}</span></div>
+      <div class="sub">Laag → Hoog</div>
+    </div>
+  </div>
+
+<script>
+  const styleUrl = "{style_url}";
+  const leftData = {left_json};
+  const rightData = {right_json};
+
+  const minVal = {min_val};
+  const maxVal = {max_val};
+  const bounds = {bounds_json};
+
+  const mapLeft = new maplibregl.Map({{
+    container: 'map_left',
+    style: styleUrl,
+    center: [{center_lon}, {center_lat}],
+    zoom: {zoom},
+    attributionControl: true
+  }});
+
+  const mapRight = new maplibregl.Map({{
+    container: 'map_right',
+    style: styleUrl,
+    center: [{center_lon}, {center_lat}],
+    zoom: {zoom},
+    attributionControl: true,
+    interactive: false
+  }});
+
+  // Sync view (links -> rechts)
+  function sync() {{
+    const c = mapLeft.getCenter();
+    mapRight.jumpTo({{
+      center: c,
+      zoom: mapLeft.getZoom(),
+      bearing: mapLeft.getBearing(),
+      pitch: mapLeft.getPitch()
+    }});
+  }}
+  mapLeft.on('move', sync);
+  mapLeft.on('moveend', sync);
+
+  // --- Basemap (OpenFreeMap layers) grijs maken op mapLeft ---
+  // We overschrijven paint-properties per layer type via setPaintProperty. [2](https://github.com/maptiler/tileserver-gl)[3](https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/c82a783a-9a58-4761-a809-b4c5d90dcd35)
+  function applyBasemapGray(map) {{
+    const style = map.getStyle();
+    const layers = (style && style.layers) ? style.layers : [];
+
+    const GRAY_BG   = "#e7e7e7";
+    const GRAY_FILL = "#cdcdcd";
+    const GRAY_LINE = "#9c9c9c";
+    const GRAY_TEXT = "#666666";
+    const GRAY_HALO = "#f2f2f2";
+
+    layers.forEach((ly) => {{
+      if (!ly || !ly.id) return;
+
+      try {{
+        switch (ly.type) {{
+          case "background":
+            map.setPaintProperty(ly.id, "background-color", GRAY_BG);
+            break;
+
+          case "fill":
+            try {{ map.setPaintProperty(ly.id, "fill-pattern", null); }} catch(e) {{}}
+            map.setPaintProperty(ly.id, "fill-color", GRAY_FILL);
+            try {{ map.setPaintProperty(ly.id, "fill-outline-color", "#b0b0b0"); }} catch(e) {{}}
+            break;
+
+          case "fill-extrusion":
+            map.setPaintProperty(ly.id, "fill-extrusion-color", GRAY_FILL);
+            break;
+
+          case "line":
+            try {{ map.setPaintProperty(ly.id, "line-pattern", null); }} catch(e) {{}}
+            map.setPaintProperty(ly.id, "line-color", GRAY_LINE);
+            break;
+
+          case "symbol":
+            try {{ map.setPaintProperty(ly.id, "text-color", GRAY_TEXT); }} catch(e) {{}}
+            try {{ map.setPaintProperty(ly.id, "text-halo-color", GRAY_HALO); }} catch(e) {{}}
+            try {{ map.setPaintProperty(ly.id, "icon-color", GRAY_TEXT); }} catch(e) {{}}
+            try {{ map.setPaintProperty(ly.id, "text-opacity", 0.85); }} catch(e) {{}}
+            break;
+
+          case "circle":
+            // POI's etc. in basemap dimmen
+            map.setPaintProperty(ly.id, "circle-color", GRAY_LINE);
+            try {{ map.setPaintProperty(ly.id, "circle-opacity", 0.35); }} catch(e) {{}}
+            break;
+
+          case "heatmap":
+            try {{ map.setPaintProperty(ly.id, "heatmap-opacity", 0.25); }} catch(e) {{}}
+            break;
+
+          case "raster":
+            // Voor het geval een style raster layers bevat
+            try {{ map.setPaintProperty(ly.id, "raster-saturation", -1); }} catch(e) {{}}
+            break;
+
+          default:
+            break;
+        }}
+      }} catch (e) {{
+        // stil negeren
+      }}
+    }});
+  }}
+
+  // --- Punten toevoegen (kleur blijft) ---
+  function addPoints(map, sourceName, layerName, data, dim=false) {{
+    if (map.getSource(sourceName)) {{
+      map.getSource(sourceName).setData(data);
+      return;
+    }}
+
+    map.addSource(sourceName, {{
+      type: 'geojson',
+      data: data
+    }});
+
+    map.addLayer({{
+      id: layerName,
+      type: 'circle',
+      source: sourceName,
+      paint: {{
+        'circle-radius': 6,
+        'circle-stroke-color': dim ? 'rgba(40,40,40,0.35)' : 'rgba(40,40,40,0.75)',
+        'circle-stroke-width': 1,
+        'circle-opacity': dim ? 0.45 : 0.85,
+        'circle-color': [
+          'interpolate', ['linear'], ['get', 'value'],
+          minVal, '#d73027',
+          (minVal + maxVal) / 2.0, '#fee08b',
+          maxVal, '#1a9850'
+        ]
+      }}
+    }});
+  }}
+
+  mapLeft.on('load', () => {{
+    // 1) eerst basemap links grijs
+    applyBasemapGray(mapLeft);
+
+    // 2) punten links toevoegen (kleur houden, desnoods iets dimmen)
+    addPoints(mapLeft, 'leftPts', 'leftLayer', leftData, true);
+
+    // 3) autozoom
+    if (bounds && bounds.length === 4) {{
+      const sw = [bounds[0], bounds[1]];
+      const ne = [bounds[2], bounds[3]];
+      mapLeft.fitBounds([sw, ne], {{
+        padding: 70,
+        maxZoom: 12,
+        duration: 0
+      }});
+    }}
+
+    // tooltip op linkerpuntlaag
+    const popup = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
+    mapLeft.on('mousemove', 'leftLayer', (e) => {{
+      mapLeft.getCanvas().style.cursor = 'pointer';
+      const p = e.features[0].properties;
+      popup
+        .setLngLat(e.lngLat)
+        .setHTML(`<b>Locatie:</b> ${{p.locatie_id}}<br/><b>Waarde:</b> ${{Number(p.value).toFixed(1)}}`)
+        .addTo(mapLeft);
+    }});
+    mapLeft.on('mouseleave', 'leftLayer', () => {{
+      mapLeft.getCanvas().style.cursor = '';
+      popup.remove();
+    }});
+  }});
+
+  mapRight.on('load', () => {{
+    // overlay (rechts) normaal, niet dimmen
+    addPoints(mapRight, 'rightPts', 'rightLayer', rightData, false);
+  }});
+
+  // --- Swipe mechanics ---
+  const wrap = document.getElementById('wrap');
+  const mapRightDiv = document.getElementById('map_right');
+  const divider = document.getElementById('divider');
+  const handle = document.getElementById('handle');
+
+  let isDragging = false;
+  let pct = 0.5;
+
+  function setSwipe(p) {{
+    pct = Math.max(0, Math.min(1, p));
+    const x = pct * wrap.clientWidth;
+    divider.style.left = x + 'px';
+    handle.style.left = x + 'px';
+    mapRightDiv.style.clipPath = `inset(0 0 0 ${{(pct*100).toFixed(2)}}%)`;
+  }}
+
+  function pointerToPct(clientX) {{
+    const rect = wrap.getBoundingClientRect();
+    return (clientX - rect.left) / rect.width;
+  }}
+
+  function onDown(e) {{
+    isDragging = true;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    setSwipe(pointerToPct(x));
+    e.preventDefault();
+  }}
+  function onMove(e) {{
+    if (!isDragging) return;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    setSwipe(pointerToPct(x));
+    e.preventDefault();
+  }}
+  function onUp() {{
+    isDragging = false;
+  }}
+
+  divider.addEventListener('mousedown', onDown);
+  handle.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+
+  divider.addEventListener('touchstart', onDown, {{passive:false}});
+  handle.addEventListener('touchstart', onDown, {{passive:false}});
+  window.addEventListener('touchmove', onMove, {{passive:false}});
+  window.addEventListener('touchend', onUp);
+
+  // init
+  setSwipe(0.5);
+</script>
+</body>
+</html>
+"""
+    return html_str
