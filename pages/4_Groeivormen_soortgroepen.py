@@ -189,6 +189,21 @@ st.divider()
 
 st.subheader("🌿 Samenstelling soortgroepen (relatief)")
 
+with st.expander("ℹ️ Hoe komt deze grafiek tot stand?"):
+    st.markdown("""
+    **Wat zie je?**  
+    Per jaar: de bijdrage van soortgroepen aan de totale bedekking (WATPTN).
+
+    **Stap 1 — Filtering:** groeivormcodes en `type='Groep'` worden uitgesloten (alleen echte soorten).  
+    **Stap 2 — Indeling:** soorten krijgen een `soortgroep` via mapping en een numerieke bedekking (`bedekkingsgraad_proc`).  
+    **Stap 3 — Teller:** per jaar en soortgroep wordt bedekking opgeteld.  
+    **Stap 4 — Noemer:** totale bedekking (WATPTN) wordt per monstername (`CollectieReferentie`) 1× meegeteld en per jaar gesommeerd.  
+    **Stap 5 — Fractie:** teller / noemer = fractie t.o.v. totale bedekking.  
+
+    **Waarom geen 100%-stack?**  
+    De staafhoogte mag <1 blijven: zo zie je ook welk deel van WATPTN niet door de getoonde soortgroepen wordt verklaard.
+    """)
+
 # A. Data voorbereiden via de utility functie
 # Deze functie voegt 'soortgroep' toe. 
 # BELANGRIJK: Zorg dat utils.py ook is bijgewerkt om RWS-codes te negeren in deze functie.
@@ -209,30 +224,44 @@ else:
     # Bereken totaal per jaar voor normalisatie
     df_totals = df_trend_species.groupby('jaar')['bedekkingsgraad_proc'].transform('sum')
     
-    # Bereken percentage aandeel
-    df_trend_species['percentage_relatief'] = 0.0
-    mask = df_totals > 0
-    df_trend_species.loc[mask, 'percentage_relatief'] = (
-        df_trend_species.loc[mask, 'bedekkingsgraad_proc'] / df_totals[mask]
-    ) * 100
 
-    # C. Grafiek tekenen
+    # B. Aggregeren: som van bedekking per jaar per soortgroep (teller)
+    df_trend_species = df_species_mapped.groupby(['jaar', 'soortgroep'])['bedekkingsgraad_proc'].sum().reset_index()
+
+    # Noemer: totale bedekking (WATPTN) per jaar, zonder dubbel tellen per monstername
+    df_year_totals = (
+        df_species_mapped
+        .groupby(['jaar', 'CollectieReferentie'])['totaal_bedekking_locatie']
+        .first()
+        .reset_index()
+    )
+    year_total_cover = df_year_totals.groupby('jaar')['totaal_bedekking_locatie'].sum()
+
+    # Fractie t.o.v. totale bedekking
+    df_trend_species['fractie_tov_totaal'] = df_trend_species.apply(
+        lambda r: (r['bedekkingsgraad_proc'] / year_total_cover.get(r['jaar'], 0.0))
+        if year_total_cover.get(r['jaar'], 0.0) not in [0, 0.0, None] and pd.notna(year_total_cover.get(r['jaar'], None))
+        else 0.0,
+        axis=1
+    )
+
+    # C. Grafiek tekenen (geen 100%-normalisatie)
     fig_stack = px.bar(
         df_trend_species,
         x='jaar',
-        y='percentage_relatief',
+        y='fractie_tov_totaal',
         color='soortgroep',
-        title='Relatieve samenstelling soortgroepen per jaar (excl. algemene groeivormen)',
+        title='Samenstelling soortgroepen t.o.v. totale bedekking (WATPTN)',
         labels={
-            'percentage_relatief': 'Aandeel (%)', 
+            'fractie_tov_totaal': 'Fractie van totale bedekking',
             'jaar': 'Jaar',
             'soortgroep': 'Groep'
         },
         color_discrete_sequence=px.colors.qualitative.Safe,
         height=500
     )
-    
-    fig_stack.update_layout(yaxis=dict(range=[0, 100], ticksuffix="%"))
+
+    fig_stack.update_layout(yaxis=dict(range=[0, 1]))
     st.plotly_chart(fig_stack, use_container_width=True)
 
     # D. Detail "Overig"

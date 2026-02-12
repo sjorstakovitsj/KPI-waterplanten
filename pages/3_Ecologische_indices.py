@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.express as px
+import numpy as np
 from utils import load_data
 
 st.set_page_config(layout="wide")
@@ -65,24 +66,78 @@ if not df['jaar'].empty:
         'diepte_m': 'mean'
     }).reset_index()
 
+    df_bubble_plot = df_bubble_range.groupby(['soort']).agg({
+    'doorzicht_m': 'mean',
+    'bedekking_pct': 'mean',
+    'diepte_m': 'mean'
+}).reset_index()
+
+    # --- NIEUW: ratio doorzicht / diepte voor x-as ---
+    # Zorg dat diepte niet 0 of negatief is om deling door 0 te voorkomen
+    df_bubble_plot["diepte_safe"] = df_bubble_plot["diepte_m"].fillna(0.0)
+    df_bubble_plot.loc[df_bubble_plot["diepte_safe"] <= 0, "diepte_safe"] = np.nan
+
+    df_bubble_plot["doorzicht_diepte_ratio"] = df_bubble_plot["doorzicht_m"] / df_bubble_plot["diepte_safe"]
+
+    # Optioneel: verwijder rijen waar ratio niet berekend kan worden
+    df_bubble_plot = df_bubble_plot.dropna(subset=["doorzicht_diepte_ratio"])
+
+    # Plotly fix voor NaNs in size (bubble size blijft diepte_m)
+    df_bubble_plot['diepte_m'] = df_bubble_plot['diepte_m'].fillna(0.1)
+    df_bubble_plot.loc[df_bubble_plot['diepte_m'] <= 0, 'diepte_m'] = 0.1
+
+
     # Plotly fix voor NaNs in size
     df_bubble_plot['diepte_m'] = df_bubble_plot['diepte_m'].fillna(0.1)
     df_bubble_plot.loc[df_bubble_plot['diepte_m'] <= 0, 'diepte_m'] = 0.1
 
     if not df_bubble_plot.empty:
         fig_bubble = px.scatter(
-            df_bubble_plot, 
-            x="doorzicht_m", 
+            df_bubble_plot,
+            x="doorzicht_diepte_ratio",
             y="bedekking_pct",
-            size="diepte_m", 
+            size="diepte_m",
             hover_name="soort",
             size_max=40,
             title=f"Ecologische indices ({sel_years[0]} - {sel_years[1]})",
-            labels={"doorzicht_m": "gem. doorzicht (m)", "bedekking_pct": "gem. bedekking (%)"}
+            labels={
+                "doorzicht_diepte_ratio": "gem. doorzicht / gem. diepte",
+                "bedekking_pct": "gem. bedekking (%)",
+                "diepte_m": "gem. diepte (m)"
+            }
         )
         st.plotly_chart(fig_bubble, use_container_width=True)
     else:
         st.warning("Geen data gevonden voor deze filtercombinatie.")
+    
+    # --- Shaded band: gewenst bereik 0.6–0.8 ---
+    fig_bubble.add_vrect(
+        x0=0.6, x1=0.8,
+        fillcolor="rgba(0, 200, 0, 0.12)",  # lichtgroen transparant
+        line_width=0,
+        annotation_text="Gewenst bereik (0.6–0.8)",
+        annotation_position="top left"
+    )
+
+    # Optioneel: extra stippellijn op de ideale waarde 0.8
+    fig_bubble.add_vline(
+        x=0.8,
+        line_width=2,
+        line_dash="dot",
+        line_color="green",
+        annotation_text="Ideaal 0.8",
+        annotation_position="top left"
+    )
+
+    # Optioneel: ook een lijn op 0.6 (minimum)
+    fig_bubble.add_vline(
+        x=0.6,
+        line_width=2,
+        line_dash="dot",
+        line_color="orange",
+        annotation_text="Minimaal 0.6",
+        annotation_position="top left"
+    )
 
 # --- HEATMAP ---
 st.subheader("Soortenaanwezigheid heatmap (top 50)")

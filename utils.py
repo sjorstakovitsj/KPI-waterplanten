@@ -7,9 +7,13 @@ import plotly.graph_objects as go
 import folium 
 import re
 import json
+import math
+from html import escape
+
 
 # --- CONFIGURATIE ---
 FILE_PATH = "AquaDeskMeasurementExport_RWS_20260129204403.csv"
+SPECIES_LOOKUP_PATH = "Koppeltabel_score_namen.csv"
 
 # --- MAPPINGS ---
 PROJECT_MAPPING = {
@@ -38,6 +42,7 @@ GROWTH_FORM_MAPPING = {
 
 # Lijst met codes die géén individuele soort zijn, maar een RWS-verzamelgroep
 EXCLUDED_SPECIES_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
+RWS_GROEIVORM_CODES = EXCLUDED_SPECIES_CODES
 
 def rd_to_wgs84(x, y):
     """Converteert Rijksdriehoek (RD) coördinaten naar WGS84 (Lat/Lon)."""
@@ -79,6 +84,27 @@ def determine_waterbody(meetobject_code):
         if code in str(meetobject_code):
             return name
     return str(meetobject_code)
+
+KRW_WATERTYPE_BY_WATERLICHAAM = {
+    # M21
+    "Markermeer": "M21",
+    "Gouwzee": "M21",
+    "IJmeer": "M21",
+    "IJsselmeer": "M21",
+    # M14
+    "Drontermeer": "M14",
+    "Eemmeer": "M14",
+    "Gooimeer": "M14",
+    "Ketelmeer": "M14",
+    "Nijkerkernauw": "M14",
+    "Nuldernauw": "M14",
+    "Randmeren": "M14",
+    "Veluwemeer": "M14",
+    "Vossemeer": "M14",
+    "Wolderwijd": "M14",
+    "Zwartemeer": "M14",
+}
+
 
 def get_species_group_mapping():
     """
@@ -416,16 +442,111 @@ def load_data():
     cols_to_keep = [
         'datum', 'jaar', 'locatie_id', 'Waterlichaam', 'Project', 'CollectieReferentie',
         'soort', 'bedekking_pct', 'waarde_bedekking', 'totaal_bedekking_locatie', 
-        'diepte_m', 'doorzicht_m', 
-        'lat', 'lon', 'x_rd', 'y_rd',
-        'groeivorm', 'type', 'Grootheid' # Grootheid toegevoegd om onderscheid te kunnen maken
+        'diepte_m', 'doorzicht_m', 'lat', 'lon', 'x_rd', 'y_rd',
+        'groeivorm', 'type', 'Grootheid', 'soort_triviaal', 'trofisch_niveau', 'krw_watertype',
+         'krw_score', 'krw_class', 'soort_display'
     ]
     
+    # --- Verrijking: NL naam, trofisch niveau, KRW score (M14/M21) ---
+    lookup = load_species_lookup()
+
+    final_df["soort_norm"] = (
+        final_df["soort"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+    )
+
+    final_df = final_df.merge(lookup, on="soort_norm", how="left")
+
+    final_df = final_df.rename(columns={
+        "NL naam": "soort_triviaal",
+        "Watertype": "trofisch_niveau"
+    })
+
+    final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
+
+    final_df["krw_score"] = np.nan
+    mask_m14 = final_df["krw_watertype"] == "M14"
+    mask_m21 = final_df["krw_watertype"] == "M21"
+    final_df.loc[mask_m14, "krw_score"] = final_df.loc[mask_m14, "M14"]
+    final_df.loc[mask_m21, "krw_score"] = final_df.loc[mask_m21, "M21"]
+
+    final_df["krw_class"] = pd.cut(
+        final_df["krw_score"],
+        bins=[0, 2, 4, 5],
+        labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+        include_lowest=True
+    )
+
+    final_df["soort_display"] = np.where(
+        final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
+        final_df["soort_triviaal"] + " (" + final_df["soort"] + ")",
+        final_df["soort"]
+    )
+
     for col in cols_to_keep:
         if col not in final_df.columns:
             final_df[col] = np.nan
 
     return final_df[cols_to_keep]
+
+@st.cache_data
+def load_species_lookup():
+    """Laad koppeltabel met NL naam, trofie (Watertype) en KRW-scores (M14/M21). Robuust voor delimiters/ontbrekende kolommen."""
+    try:
+        df_lu = pd.read_csv(SPECIES_LOOKUP_PATH, sep=None, engine="python", encoding="utf-8-sig")
+    except Exception as e:
+        st.warning(f"⚠️ Koppeltabel kon niet worden ingelezen ({SPECIES_LOOKUP_PATH}): {e}")
+        return pd.DataFrame(columns=["soort_norm", "NL naam", "Watertype", "M14", "M21"])
+
+    df_lu.columns = df_lu.columns.str.strip()
+
+    # Optioneel: vang alternatieve kolomnamen af
+    rename_map = {
+        "NL_naam": "NL naam",
+        "NLnaam": "NL naam",
+        "Trofisch niveau": "Watertype",
+        "Trofie": "Watertype",
+        "Trofieniveau": "Watertype",
+        "Wetenschappelijke_naam": "Wetenschappelijke naam",
+        "WetenschappelijkeNaam": "Wetenschappelijke naam",
+    }
+    df_lu = df_lu.rename(columns={k: v for k, v in rename_map.items() if k in df_lu.columns})
+
+    # Minimaal required
+    if "Wetenschappelijke naam" not in df_lu.columns:
+        st.warning("⚠️ Koppeltabel mist kolom 'Wetenschappelijke naam'. Verrijking wordt overgeslagen.")
+        return pd.DataFrame(columns=["soort_norm", "NL naam", "Watertype", "M14", "M21"])
+
+    # Optioneel aanwezige kolommen: voeg toe als ze ontbreken (blijven NaN)
+    if "NL naam" not in df_lu.columns:
+        df_lu["NL naam"] = np.nan
+    if "Watertype" not in df_lu.columns:
+        df_lu["Watertype"] = np.nan
+    for c in ["M14", "M21"]:
+        if c not in df_lu.columns:
+            df_lu[c] = np.nan
+        df_lu[c] = pd.to_numeric(df_lu[c], errors="coerce")
+
+    # Normaliseer sleutel
+    df_lu["soort_norm"] = (
+        df_lu["Wetenschappelijke naam"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+    )
+
+    # Voorkom row-explosion door dubbelen
+    sort_cols = [c for c in ["NL naam", "Watertype", "M14", "M21"] if c in df_lu.columns]
+    if sort_cols:
+        df_lu = df_lu.sort_values(by=sort_cols, ascending=[False] * len(sort_cols))
+
+    df_lu = df_lu.drop_duplicates(subset=["soort_norm"], keep="first")
+
+    return df_lu[["soort_norm", "NL naam", "Watertype", "M14", "M21"]]
 
 # --- PLOT FUNCTIES ---
 def plot_trend_line(df, x_col, y_col, color=None, title="Trend"):
@@ -448,11 +569,11 @@ def interpret_soil_state(df_loc):
     if pd.isna(total_cover):
         text += "Geen bedekkingsgegevens beschikbaar.\n"
     elif total_cover < 5:
-        text += "⚠️ **Zeer kale bodem** (<5% bedekking). Mogelijk lichtgebrek of woeling.\n"
+        text += "⚠️ **Zeer kale bodem** (<5% bedekking).\n"
     elif dom_type == 'Ondergedoken':
-        text += f"✅ Goede ontwikkeling (**{total_cover:.0f}%**). Dominantie van ondergedoken planten.\n"
+        text += f"✅ Goede ontwikkeling (**{total_cover:.0f}%**).\n"
     elif dom_type == 'Drijvend':
-        text += f"⚠️ Veel drijfbladplanten (**{total_cover:.0f}%**). Mogelijk slibrijke bodem.\n"
+        text += f"⚠️ Veel drijfbladplanten (**{total_cover:.0f}%**).\n"
     elif dom_type == 'Draadalgen':
         text += "❌ Dominantie van draadalgen wijst op verstoring.\n"
         
@@ -547,7 +668,230 @@ def get_color_transparency(value):
     elif value < 3.0: return '#5ab4ac'    # Medium Groen/Teal
     else: return '#01665e'                # Donkergroen/Teal
 
-def create_map(dataframe, mode, label_veg="Vegetatie"):
+def get_color_krw(score):
+    """KRW-score 1-5: 1-2 groen, 3-4 oranje, 5 rood."""
+    if pd.isna(score): 
+        return 'gray'
+    try:
+        s = float(score)
+    except:
+        return 'gray'
+    if s <= 2:
+        return '#1a9850'  # groen
+    elif s <= 4:
+        return '#ff7f0e'  # oranje
+    else:
+        return '#d73027'  # rood
+
+import math
+from html import escape
+
+def _polar_to_cart(cx, cy, r, angle_rad):
+    return (cx + r * math.cos(angle_rad), cy + r * math.sin(angle_rad))
+
+def _wedge_path(cx, cy, r, start_angle, end_angle):
+    # Grote boog?
+    large_arc = 1 if (end_angle - start_angle) > math.pi else 0
+    x1, y1 = _polar_to_cart(cx, cy, r, start_angle)
+    x2, y2 = _polar_to_cart(cx, cy, r, end_angle)
+    # Move center -> line to start -> arc -> close
+    return f"M {cx:.2f},{cy:.2f} L {x1:.2f},{y1:.2f} A {r:.2f},{r:.2f} 0 {large_arc} 1 {x2:.2f},{y2:.2f} Z"
+
+def pie_svg(
+    counts: dict,
+    color_map: dict,
+    order=None,
+    size=30,
+    border=1,
+    border_color="#333",
+    fixed_total=None,          # <-- nieuw: bv. 100 voor bedekking%
+    fill_gap=False,            # <-- nieuw: laat rest leeg (transparant) als True
+    gap_color="transparent"    # <-- nieuw: kun je ook '#ffffff' maken
+):
+    """
+    SVG pie chart.
+    - Default: normaliseert op som(counts) -> altijd volle cirkel (geschikt voor records).
+    - fixed_total=100 + fill_gap=True: sectoren zijn absolute percentages, rest blijft leeg/transparant.
+    """
+
+    # Filter nonzero values
+    nonzero = [(k, float(v)) for k, v in counts.items() if v is not None and float(v) > 0]
+
+    # Als helemaal geen waarden
+    if not nonzero:
+        r = (size / 2) - border
+        cx = cy = size / 2
+        return (
+            f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+            f"xmlns='http://www.w3.org/2000/svg'>"
+            f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='#cccccc' stroke='{border_color}' stroke-width='{border}' />"
+            f"</svg>"
+        )
+
+    r = (size / 2) - border
+    cx = cy = size / 2
+
+    # Kies de schaal waarop we normaliseren
+    if fixed_total is not None:
+        denom = float(fixed_total)
+        # Cap: als som > fixed_total, dan knippen we af op fixed_total (geen rescale)
+        # (alternatief: rescale zodat het altijd 100% wordt, maar dat wil jij juist niet)
+        # We tekenen wedges op basis van val/denom; rest blijft leeg.
+    else:
+        denom = sum(v for _, v in nonzero)
+
+    if denom <= 0:
+        # fallback
+        return (
+            f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+            f"xmlns='http://www.w3.org/2000/svg'>"
+            f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='#cccccc' stroke='{border_color}' stroke-width='{border}' />"
+            f"</svg>"
+        )
+
+    # ✅ Special-case: 100% volle cirkel (alleen als werkelijk (bijna) volledig)
+    # - Voor fixed_total=100: alleen vol als som >= 99.9
+    # - Voor default: alleen vol als één categorie ~100% van denom
+    sum_vals = sum(v for _, v in nonzero)
+    if fixed_total is not None:
+        if (sum_vals / denom) >= 0.999 and len(nonzero) == 1:
+            cat, _ = nonzero[0]
+            fill = color_map.get(cat, "#999999")
+            return (
+                f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+                f"xmlns='http://www.w3.org/2000/svg'>"
+                f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='{fill}' stroke='{border_color}' stroke-width='{border}' />"
+                f"</svg>"
+            )
+    else:
+        # default gedrag: als één categorie alles is -> volle cirkel
+        if len(nonzero) == 1:
+            cat, _ = nonzero[0]
+            fill = color_map.get(cat, "#999999")
+            return (
+                f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+                f"xmlns='http://www.w3.org/2000/svg'>"
+                f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='{fill}' stroke='{border_color}' stroke-width='{border}' />"
+                f"</svg>"
+            )
+
+    cats = order if order else list(counts.keys())
+
+    # Start op -90° (bovenaan)
+    start = -math.pi / 2
+    paths = []
+
+    # (optioneel) achtergrondvulling voor "gap" (meestal transparant)
+    # Als fill_gap=False doen we niets; de ondergrond blijft transparant.
+    if fixed_total is not None and fill_gap and gap_color != "transparent":
+        paths.append(f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='{gap_color}' />")
+
+    # Wedges tekenen: angle = (val/denom)*2π
+    # Bij fixed_total: som kan < denom -> overblijvende sector blijft leeg.
+    for cat in cats:
+        val = float(counts.get(cat, 0) or 0)
+        if val <= 0:
+            continue
+
+        frac = val / denom
+        if frac <= 0:
+            continue
+
+        end = start + frac * 2 * math.pi
+        color = color_map.get(cat, "#999999")
+
+        d = _wedge_path(cx, cy, r, start, end)
+        paths.append(f"<path d='{d}' fill='{color}' />")
+
+        start = end
+
+        # Bij fixed_total cap: stop als we (bijna) rond zijn
+        if fixed_total is not None and (start - (-math.pi / 2)) >= 2 * math.pi * 0.999:
+            break
+
+    # Rand bovenop
+    return (
+        f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+        f"xmlns='http://www.w3.org/2000/svg'>"
+        + "".join(paths) +
+        f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='none' stroke='{border_color}' stroke-width='{border}' />"
+        f"</svg>"
+    )
+
+def create_pie_map(
+    df_locs: pd.DataFrame,
+    counts_by_loc: dict,
+    label: str,
+    color_map: dict,
+    order=None,
+    size_px: int = 30,
+    zoom_start: int = 10,
+    fixed_total=None,     # <-- nieuw
+    fill_gap=False,       # <-- nieuw
+    gap_color="transparent"
+):
+    """
+    Folium kaart met pie-chart markers (SVG via DivIcon) per locatie.
+    Verwacht df_locs met kolommen: locatie_id, Waterlichaam, lat, lon (+ evt. diepte/doorzicht)
+    counts_by_loc: dict locatie_id -> dict categorie -> count
+    """
+    # Center
+    if df_locs["lat"].isnull().all():
+        center_lat, center_lon = 52.5, 5.5
+    else:
+        center_lat, center_lon = df_locs["lat"].mean(), df_locs["lon"].mean()
+
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_start, control_scale=True)
+
+    for row in df_locs.dropna(subset=["lat", "lon"]).itertuples():
+        loc_id = getattr(row, "locatie_id")
+        wb = getattr(row, "Waterlichaam", "")
+        counts = counts_by_loc.get(loc_id, {})
+        svg = pie_svg(counts,
+            color_map=color_map,
+            order=order,
+            size=size_px,
+            fixed_total=fixed_total,
+            fill_gap=fill_gap,
+            gap_color=gap_color
+)
+
+        # Tooltip: korte samenvatting
+        # Toon alleen categorieën met >0
+        parts = [f"{escape(str(k))}: {int(v)}" for k, v in counts.items() if v]
+        dist_txt = "<br/>".join(parts) if parts else "Geen data"
+
+        # Diepte & doorzicht (kunnen NaN zijn)
+        diepte = getattr(row, "diepte_m", float("nan"))
+        doorzicht = getattr(row, "doorzicht_m", float("nan"))
+
+        diepte_txt = "n.v.t." if pd.isna(diepte) else f"{diepte:.2f} m"
+        doorzicht_txt = "n.v.t." if pd.isna(doorzicht) else f"{doorzicht:.2f} m"
+
+        tooltip_html = (
+            f"<b>Locatie:</b> {escape(str(loc_id))}<br/>"
+            f"<b>Water:</b> {escape(str(wb))}<br/>"
+            f"<b>🌊 Diepte:</b> {escape(diepte_txt)}<br/>"
+            f"<b>👁️ Doorzicht:</b> {escape(doorzicht_txt)}<br/>"
+            f"<b>{escape(label)}:</b><br/>{dist_txt}"
+        )
+
+        icon = folium.DivIcon(
+            html=f"""
+            <div style="width:{size_px}px;height:{size_px}px;transform: translate(-50%, -50%);">
+                {svg}
+            </div>
+            """
+        )
+        folium.Marker(
+            location=[getattr(row, "lat"), getattr(row, "lon")],
+            icon=icon,
+            tooltip=tooltip_html,
+        ).add_to(m)
+
+    return m
+
+def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation", category_col=None, category_color_map=None):
     """
     Genereert een Folium kaart (OSM-tiles).
 
@@ -570,10 +914,23 @@ def create_map(dataframe, mode, label_veg="Vegetatie"):
         radius = 5
         fill_opacity = 0.8
         if mode == "Vegetatie":
-            val = getattr(row, 'waarde_veg', 0.0)
-            color = get_color_vegetation(val)
-            main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
-            radius = 4 + (min(val, 100) / 100 * 6) if val > 0 else 4
+            # CATEGORISCH
+            if value_style == "categorical" and category_col:
+                cat = getattr(row, category_col, None)
+                color = (category_color_map or {}).get(cat, '#999999')
+                main_line = f"<b>🌱 {label_veg}:</b> {cat}"
+                radius = 6
+            else:
+                # NUMERIEK
+                val = getattr(row, 'waarde_veg', 0.0)
+                if value_style == "krw":
+                    color = get_color_krw(val)
+                    main_line = f"<b>🌱 {label_veg}:</b> {val:.2f}"
+                    radius = 6
+                else:
+                    color = get_color_vegetation(val)
+                    main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
+                    radius = 4 + (min(val, 100) / 100 * 6) if val > 0 else 4
         elif mode == "Diepte":
             val = getattr(row, 'diepte_m', float('nan'))
             color = get_color_depth(val)

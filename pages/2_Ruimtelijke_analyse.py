@@ -2,8 +2,9 @@
 import streamlit as st
 import pandas as pd
 import folium
+import numpy as np
 from streamlit_folium import st_folium
-from utils import load_data, add_species_group_columns, create_map, get_sorted_species_list
+from utils import load_data, add_species_group_columns, create_pie_map, create_map, get_sorted_species_list, EXCLUDED_SPECIES_CODES, RWS_GROEIVORM_CODES
 
 st.set_page_config(layout="wide", page_title="Ruimtelijke analyse")
 
@@ -60,20 +61,17 @@ selected_coverage_type = None
 
 # A. Logica voor Groepen
 if analysis_level == "groepen & aggregaties":
-    # Optie A1: Totale bedekking
-    opt_general = ["totale bedekking"]
-    
-    # Optie A2: RWS Groeivormen (uit ruwe data waar type='Groep')
-    rws_forms = sorted(df_filtered[df_filtered['type'] == 'Groep']['groeivorm'].unique())
-    
-    # Optie A3: Taxonomische Soortgroepen (uit de verrijkte dataset)
+
+    # Optie A1: Algemene aggregaties
+    opt_general = ["totale bedekking", "Groeivormen (pie)", "Trofieniveau", "KRW score"]
+
+    # Optie A2: Taxonomische soortgroepen (uit verrijkte dataset)
     species_groups_list = sorted(df_species_groups['soortgroep'].dropna().unique())
-    
-    all_options = opt_general + rws_forms + species_groups_list
-    selected_coverage_type = st.sidebar.selectbox(
-        "selecteer groep",
-        options=all_options
-    )
+
+    # NB: losse groeivormen NIET meer als selectiekeuze aanbieden
+    all_options = opt_general + species_groups_list
+
+    selected_coverage_type = st.sidebar.selectbox("selecteer groep", options=all_options)
 
 # B. Logica voor Individuele Soorten
 else:
@@ -118,11 +116,39 @@ if analysis_level == "groepen & aggregaties":
         df_veg_calc = df_filtered.groupby('locatie_id')['totaal_bedekking_locatie'].mean().reset_index()
         df_veg_calc.rename(columns={'totaal_bedekking_locatie': 'waarde_veg'}, inplace=True)
 
-    elif selected_coverage_type in rws_forms:
-        # Filter de RUWE dataset op RWS groeivorm
-        df_subset = df_filtered[df_filtered['groeivorm'] == selected_coverage_type]
-        df_veg_calc = df_subset.groupby('locatie_id')['bedekking_pct'].mean().reset_index()
-        df_veg_calc.rename(columns={'bedekking_pct': 'waarde_veg'}, inplace=True)
+    elif selected_coverage_type == "KRW score":
+        df_s = df_filtered[(df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))].copy()
+
+        # Alleen rijen met score
+        df_s = df_s.dropna(subset=["krw_score"])
+        if df_s.empty:
+            df_veg_calc = pd.DataFrame({"locatie_id": df_locs["locatie_id"].unique(), "waarde_veg": 0.0})
+        else:
+            # Gewicht = bedekking (als numeriek), fallback 1
+            w = pd.to_numeric(df_s["bedekking_pct"], errors="coerce").fillna(1.0).clip(lower=0)
+            df_s["w"] = w
+
+            # Weighted mean per locatie: sum(score*w)/sum(w)
+            agg = df_s.groupby("locatie_id").apply(
+                lambda g: (g["krw_score"] * g["w"]).sum() / g["w"].sum() if g["w"].sum() > 0 else g["krw_score"].mean()
+            )
+            df_veg_calc = agg.reset_index().rename(columns={0: "waarde_veg"})
+
+    elif selected_coverage_type == "Trofieniveau":
+        df_s = df_filtered[(df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(RWS_GROEIVORM_CODES))].copy()
+        df_s = df_s.dropna(subset=["trofisch_niveau"])
+        if df_s.empty:
+            df_veg_calc = pd.DataFrame({"locatie_id": df_locs["locatie_id"].unique(), "trofie_cat": "Onbekend"})
+        else:
+            df_s["bedekking_num"] = pd.to_numeric(df_s["bedekking_pct"], errors="coerce").fillna(1.0).clip(lower=0)
+
+            # Som bedekking per locatie + trofie
+            tmp = df_s.groupby(["locatie_id", "trofisch_niveau"])["bedekking_num"].sum().reset_index()
+
+            # Kies dominante trofie per locatie
+            idx = tmp.groupby("locatie_id")["bedekking_num"].idxmax()
+            dom = tmp.loc[idx, ["locatie_id", "trofisch_niveau"]].rename(columns={"trofisch_niveau": "trofie_cat"})
+            df_veg_calc = dom
 
     elif selected_coverage_type in species_groups_list:
         # Filter de VERRIJKTE dataset op taxonomische groep (sommeren want groep bestaat uit meerdere soorten)
@@ -141,10 +167,25 @@ else:
 
 # Stap 3: Merge alles samen
 # Left join op locaties: zodat we OOK punten zien waar wel diepte is gemeten, maar de soort NIET voorkomt (waarde 0)
-df_map_data = pd.merge(df_locs, df_veg_calc, on='locatie_id', how='left')
+PIE_TYPES = ["KRW score", "Trofieniveau", "Groeivormen (pie)"]
 
-# BELANGRIJK: Vul NaN op met 0. Dit betekent: "Op deze locatie is de soort niet waargenomen"
-df_map_data['waarde_veg'] = df_map_data['waarde_veg'].fillna(0)
+# Voor pie-lagen: geen merge nodig; we gebruiken df_locs als basis
+if analysis_level == "groepen & aggregaties" and layer_mode == "Vegetatie" and selected_coverage_type in PIE_TYPES:
+    df_map_data = df_locs.copy()
+
+    # Houd compatibiliteit met bestaande code (tabel/sortering verwacht vaak waarde_veg)
+    if "waarde_veg" not in df_map_data.columns:
+        df_map_data["waarde_veg"] = 0.0
+
+else:
+    # Normale (numerieke) kaartwaarden -> bestaande merge-logica
+    # Zorg dat df_veg_calc altijd een locatie_id heeft; anders maak een lege placeholder
+    if (df_veg_calc is None) or df_veg_calc.empty or ("locatie_id" not in df_veg_calc.columns):
+        df_veg_calc = df_locs[["locatie_id"]].copy()
+        df_veg_calc["waarde_veg"] = np.nan
+
+    df_map_data = pd.merge(df_locs, df_veg_calc, on="locatie_id", how="left")
+    df_map_data["waarde_veg"] = df_map_data["waarde_veg"].fillna(0)
 
 # --- WEERGAVE ---
 
@@ -164,25 +205,217 @@ elif layer_mode == "Doorzicht":
     st.caption("Legenda: Bruin (Troebel) → Groen (Helder)")
 
 # Map aanmaken
-map_obj = create_map(df_map_data, layer_mode, label_veg=selected_coverage_type)
+if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and selected_coverage_type in ["KRW score", "Trofieniveau", "Groeivormen (pie)"]:
+    df_locs_for_map = df_locs.copy()
+
+    if selected_coverage_type == "Groeivormen (pie)":
+        # Groeivormen komen uit de RWS-groepregels (type='Groep')
+        df_forms = df_filtered[df_filtered["type"] == "Groep"].copy()
+
+        # Bedekking numeriek maken (voor pie op basis van % bedekking)
+        df_forms["bedekking_num"] = pd.to_numeric(df_forms["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
+
+        # Som bedekking per locatie per groeivorm (pie-waarden)
+        pivot = (
+            df_forms.groupby(["locatie_id", "groeivorm"])["bedekking_num"]
+            .sum()
+            .unstack(fill_value=0)
+        )
+
+        counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+
+        # Kleuren + volgorde (zelfde gevoel als in je groeivorm grafieken)
+        color_map = {
+            "Ondergedoken": "#2ca02c",   # groen
+            "Emergent": "#ffd700",       # geel (goud)
+            "Draadalgen": "#c2a5cf",     # lichtpaars
+            "Drijvend": "#ff7f0e",       # oranje
+            "FLAB": "#d62728",           # rood
+            "Kroos": "#8c510a",          # bruin
+        }
+
+        order = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
+
+        map_obj = create_pie_map(
+            df_locs_for_map,
+            counts_by_loc=counts_by_loc,
+            label="Groeivormen (% bedekking)",
+            color_map=color_map,
+            order=order,
+            size_px=30,
+            zoom_start=10,
+            fixed_total=100,          # <-- belangrijk
+            fill_gap=True,            # <-- laat rest leeg (transparant)
+            gap_color="transparent"   # <-- expliciet
+)
+
+    elif selected_coverage_type == "KRW score":
+        # Individuele soorten (records) -> verdeling per KRW-klasse per locatie
+        df_species = df_filtered[
+            (df_filtered["type"] == "Soort") &
+            (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
+        ].copy()
+
+        # Gebruik bestaande krw_class als die er is; anders afleiden uit krw_score
+        if "krw_class" in df_species.columns:
+            df_species["krw_cat"] = df_species["krw_class"]
+        else:
+            df_species["krw_cat"] = pd.cut(
+                df_species["krw_score"],
+                bins=[0, 2, 4, 5],
+                labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+                include_lowest=True
+            )
+
+        # Alleen records met categorie
+        df_species = df_species.dropna(subset=["krw_cat"])
+
+        # counts per locatie per categorie
+        if df_species.empty:
+            counts_by_loc = {}
+        else:
+            pivot = df_species.groupby(["locatie_id", "krw_cat"]).size().unstack(fill_value=0)
+            counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+
+        color_map = {
+            "Gunstig (1-2)": "#2ca02c",   # groen
+            "Neutraal (3-4)": "#ff7f0e",  # oranje
+            "Ongewenst (5)": "#d62728"    # rood
+        }
+        order = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"]
+
+        map_obj = create_pie_map(
+            df_locs_for_map,
+            counts_by_loc=counts_by_loc,
+            label="KRW-score (records)",
+            color_map=color_map,
+            order=order,
+            size_px=30,
+            zoom_start=10
+        )
+
+    else:  # "Trofieniveau"
+        # Individuele soorten (records) -> verdeling per trofieniveau per locatie
+        df_species = df_filtered[
+            (df_filtered["type"] == "Soort") &
+            (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
+        ].copy()
+
+        # Alleen records met trofisch niveau
+        df_species = df_species.dropna(subset=["trofisch_niveau"])
+
+        if df_species.empty:
+            counts_by_loc = {}
+        else:
+            pivot = df_species.groupby(["locatie_id", "trofisch_niveau"]).size().unstack(fill_value=0)
+            counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+
+        # Kleuren (pas gerust aan)
+        color_map = {
+            "oligotroof": "#2ca02c",       # groen
+            "mesotroof": "#1f77b4",        # blauw
+            "eutroof": "#ff7f0e",          # oranje
+            "sterk eutroof": "#d62728",    # rood
+            "kroos": "#8c510a",
+            "brak": "#8073ac",
+            "marien": "#8073ac",           
+            "Onbekend": "#999999",
+        }
+        order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "kroos", "brak", "marien", "Onbekend"]
+
+        map_obj = create_pie_map(
+            df_locs_for_map,
+            counts_by_loc=counts_by_loc,
+            label="Trofieniveau (records)",
+            color_map=color_map,
+            order=order,
+            size_px=30,
+            zoom_start=10
+        )
+
+else:
+    # Bestaande functionaliteit behouden
+    map_obj = create_map(df_map_data, layer_mode, label_veg=selected_coverage_type)
+
 st_folium(map_obj, height=600, width=None)
+
+# --- Extra kolommen per locatie: KRW-score en Trofieniveau ---
+df_species = df_filtered[
+    (df_filtered["type"] == "Soort") &
+    (~df_filtered["soort"].isin(RWS_GROEIVORM_CODES))
+].copy()
+
+# 1) KRW-score per locatie (gewogen gemiddelde op basis van bedekking)
+df_krw = df_species.dropna(subset=["krw_score"]).copy()
+if not df_krw.empty:
+    df_krw["bedekking_num"] = pd.to_numeric(df_krw["bedekking_pct"], errors="coerce").fillna(1.0).clip(lower=0)
+
+    krw_loc = (
+        df_krw.groupby("locatie_id")
+        .apply(lambda g: (g["krw_score"] * g["bedekking_num"]).sum() / g["bedekking_num"].sum()
+               if g["bedekking_num"].sum() > 0 else g["krw_score"].mean())
+        .reset_index(name="krw_score_loc")
+    )
+else:
+    krw_loc = pd.DataFrame(columns=["locatie_id", "krw_score_loc"])
+
+# 2) Trofieniveau per locatie (dominant: hoogste som bedekking)
+df_trof = df_species.dropna(subset=["trofisch_niveau"]).copy()
+if not df_trof.empty:
+    df_trof["bedekking_num"] = pd.to_numeric(df_trof["bedekking_pct"], errors="coerce").fillna(1.0).clip(lower=0)
+
+    tmp = (
+        df_trof.groupby(["locatie_id", "trofisch_niveau"])["bedekking_num"]
+        .sum()
+        .reset_index()
+    )
+
+    idx = tmp.groupby("locatie_id")["bedekking_num"].idxmax()
+    trof_loc = tmp.loc[idx, ["locatie_id", "trofisch_niveau"]].rename(
+        columns={"trofisch_niveau": "trofieniveau_loc"}
+    )
+else:
+    trof_loc = pd.DataFrame(columns=["locatie_id", "trofieniveau_loc"])
+
+# Merge de locatie-samenvattingen in df_map_data
+df_map_data = (
+    df_map_data
+    .merge(krw_loc, on="locatie_id", how="left")
+    .merge(trof_loc, on="locatie_id", how="left")
+)
 
 # --- TABEL ---
 st.divider()
 with st.expander(f"Toon data voor {selected_coverage_type}"):
-    # Filter de tabel om alleen locaties te tonen waar de soort/groep ook echt voorkomt (>0)
-    # Tenzij de gebruiker expliciet Diepte/Doorzicht wil zien, dan alles tonen.
+
     df_display = df_map_data.copy()
-    
-    # Optioneel: Sorteer op hoogste vegetatiewaarde om direct te zien waar het groeit
-    df_display = df_display.sort_values(by='waarde_veg', ascending=False)
+
+    # Veilige sortering
+    if "waarde_veg" in df_display.columns:
+        df_display = df_display.sort_values(by="waarde_veg", ascending=False)
+    elif "krw_score_loc" in df_display.columns:
+        df_display = df_display.sort_values(by="krw_score_loc", ascending=True)
+
+    # Kolommen voor weergave
+    cols = ["locatie_id", "Waterlichaam", "waarde_veg", "krw_score_loc", "trofieniveau_loc", "diepte_m", "doorzicht_m"]
+    cols = [c for c in cols if c in df_display.columns]
+
+    # Dynamische formattering van waarde_veg
+    if selected_coverage_type == "KRW score":
+        waarde_cfg = st.column_config.NumberColumn("waarde_veg (KRW)", format="%.2f")
+    elif selected_coverage_type == "Trofieniveau":
+        waarde_cfg = st.column_config.TextColumn("waarde_veg")
+    else:
+        waarde_cfg = st.column_config.NumberColumn(f"{selected_coverage_type} (%)", format="%.1f%%")
 
     st.dataframe(
-        df_display[['locatie_id', 'Waterlichaam', 'waarde_veg', 'diepte_m', 'doorzicht_m']], 
+        df_display[cols],
         use_container_width=True,
         column_config={
-            "waarde_veg": st.column_config.NumberColumn(f"{selected_coverage_type} (%)", format="%.1f%%"),
+            "waarde_veg": waarde_cfg,
+            "krw_score_loc": st.column_config.NumberColumn("KRW score (locatie)", format="%.2f"),
+            "trofieniveau_loc": st.column_config.TextColumn("Trofieniveau (dominant)"),
             "diepte_m": st.column_config.NumberColumn("Diepte (m)", format="%.2f"),
-            "doorzicht_m": st.column_config.NumberColumn("Doorzicht (m)", format="%.2f")
+            "doorzicht_m": st.column_config.NumberColumn("Doorzicht (m)", format="%.2f"),
         }
     )

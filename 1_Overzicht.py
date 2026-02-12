@@ -33,7 +33,31 @@ if not df.empty:
     
     # Dataframes voor KPI's (Huidig vs Vorig jaar)
     df_year = df_filtered[df_filtered['jaar'] == selected_year]
-    df_prev = df_filtered[df_filtered['jaar'] == selected_year - 1]
+    # --- MATCH: vorige meetronde per waterlichaam (in plaats van altijd jaar-1) ---
+    df_year = df_filtered[df_filtered['jaar'] == selected_year]
+
+    # Waterlichamen die in het geselecteerde jaar voorkomen
+    current_wbs = sorted(df_year['Waterlichaam'].dropna().unique())
+
+    prev_parts = []
+    prev_year_map = {}
+
+    for wb in current_wbs:
+        # alle jaren waarin dit waterlichaam voorkomt
+        years_wb = sorted(df_filtered.loc[df_filtered['Waterlichaam'] == wb, 'jaar'].dropna().unique())
+        # laatste jaar vóór selected_year
+        prev_years = [y for y in years_wb if y < selected_year]
+        if prev_years:
+            prev_y = max(prev_years)
+            prev_year_map[wb] = prev_y
+            prev_parts.append(df_filtered[(df_filtered['Waterlichaam'] == wb) & (df_filtered['jaar'] == prev_y)])
+
+    # Samengevoegde "vorige meting" dataset
+    df_prev_matched = pd.concat(prev_parts, ignore_index=True) if prev_parts else pd.DataFrame(columns=df_filtered.columns)
+
+    # Alleen waterlichamen meenemen waarvoor ook echt een vorige meting bestaat
+    matched_wbs = sorted(prev_year_map.keys())
+    df_year_matched = df_year[df_year['Waterlichaam'].isin(matched_wbs)].copy()
 else:
     st.error("Geen data geladen. Controleer utils.py en het bronbestand.")
     st.stop()
@@ -41,10 +65,96 @@ else:
 # --- 1. GLOBALE KPI'S ---
 # KPI Berekeningen
 # Gebruikt 'totaal_bedekking_locatie' (de WATPTN waarde uit utils.py)
-avg_bedekking, d_bedekking = calculate_kpi(df_year, df_prev, 'totaal_bedekking_locatie', is_loc_metric=True)
-avg_doorzicht, d_doorzicht = calculate_kpi(df_year, df_prev, 'doorzicht_m', is_loc_metric=True)
-n_soorten = df_year['soort'].nunique()
-d_soorten = n_soorten - (df_prev['soort'].nunique() if not df_prev.empty else n_soorten)
+avg_bedekking, d_bedekking = calculate_kpi(df_year_matched, df_prev_matched, 'totaal_bedekking_locatie', is_loc_metric=True)
+avg_doorzicht, d_doorzicht = calculate_kpi(df_year_matched, df_prev_matched, 'doorzicht_m', is_loc_metric=True)
+
+# Soortenrijkdom: liefst alleen individuele soorten tellen
+RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
+
+df_year_species = df_year_matched[(df_year_matched['type'] == 'Soort') & (~df_year_matched['soort'].isin(RWS_GROEIVORM_CODES))]
+df_prev_species = df_prev_matched[(df_prev_matched['type'] == 'Soort') & (~df_prev_matched['soort'].isin(RWS_GROEIVORM_CODES))]
+
+n_soorten = df_year_species['soort'].nunique()
+prev_soorten = df_prev_species['soort'].nunique() if not df_prev_species.empty else n_soorten
+d_soorten = n_soorten - prev_soorten
+
+# --- EXTRA: Taartdiagrammen (KRW-score & Trofieniveau) ---
+st.subheader("🥧 Samenstelling waarnemingen (individuele soorten)")
+
+# Zelfde exclude-lijst als elders (RWS-verzamelcodes + WATPTN)
+RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
+
+# Filter naar individuele soorten (geen groepen/codes)
+df_ind = df_year[(df_year["type"] == "Soort") & (~df_year["soort"].isin(RWS_GROEIVORM_CODES))].copy()
+
+c_pie1, c_pie2 = st.columns(2)
+
+# 1) KRW-score verdeling (alleen waar score beschikbaar is)
+with c_pie1:
+    st.markdown("**Verdeling waarnemingen per KRW-score**")
+
+    if "krw_class" not in df_ind.columns and "krw_score" not in df_ind.columns:
+        st.info("KRW-score is nog niet beschikbaar in de dataset (controleer verrijking in utils.py).")
+    else:
+        # Gebruik krw_class als die bestaat; anders classificeer op basis van krw_score
+        if "krw_class" in df_ind.columns:
+            s = df_ind["krw_class"]
+        else:
+            # fallback classificatie op basis van score
+            s = pd.cut(
+                df_ind["krw_score"],
+                bins=[0, 2, 4, 5],
+                labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+                include_lowest=True
+            )
+
+        # Alleen waarden meenemen die beschikbaar zijn
+        s = s.dropna()
+        if s.empty:
+            st.info("Geen KRW-scores beschikbaar voor de huidige selectie.")
+        else:
+            pie_df = s.value_counts().rename_axis("KRW-klasse").reset_index(name="Aantal waarnemingen")
+
+            color_map = {
+                "Gunstig (1-2)": "#2ca02c",   # groen
+                "Neutraal (3-4)": "#ff7f0e",  # oranje
+                "Ongewenst (5)": "#d62728"    # rood
+            }
+
+            fig_krw = px.pie(
+                pie_df,
+                names="KRW-klasse",
+                values="Aantal waarnemingen",
+                color="KRW-klasse",
+                color_discrete_map=color_map,
+                hole=0.35
+            )
+            fig_krw.update_traces(textposition="inside", textinfo="percent+label")
+            fig_krw.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_krw, use_container_width=True)
+
+# 2) Trofieniveau verdeling (alleen waar beschikbaar)
+with c_pie2:
+    st.markdown("**Verdeling waarnemingen per trofieniveau**")
+
+    if "trofisch_niveau" not in df_ind.columns:
+        st.info("Trofieniveau is nog niet beschikbaar in de dataset (controleer verrijking in utils.py).")
+    else:
+        t = df_ind["trofisch_niveau"].dropna()
+        if t.empty:
+            st.info("Geen trofieniveaus beschikbaar voor de huidige selectie.")
+        else:
+            pie_df = t.value_counts().rename_axis("Trofieniveau").reset_index(name="Aantal waarnemingen")
+
+            fig_trofie = px.pie(
+                pie_df,
+                names="Trofieniveau",
+                values="Aantal waarnemingen",
+                hole=0.35
+            )
+            fig_trofie.update_traces(textposition="inside", textinfo="percent+label")
+            fig_trofie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_trofie, use_container_width=True)
 
 # KPI Weergave
 c1, c2, c3 = st.columns(3)
@@ -179,6 +289,21 @@ if selected_trend_bodies:
     # --- GRAFIEK 3: RELATIEVE SAMENSTELLING SOORTGROEPEN (NIEUW) ---
     st.divider()
     st.markdown("**Relatieve samenstelling soortgroepen**")
+
+    with st.expander("ℹ️ Hoe komt deze grafiek tot stand?"):
+        st.markdown("""
+    **Wat zie je?**  
+    Per jaar: de bijdrage van soortgroepen aan de totale bedekking (WATPTN).
+
+    **Stap 1 — Filtering:** groeivormcodes en `type='Groep'` worden uitgesloten (alleen echte soorten).  
+    **Stap 2 — Indeling:** soorten krijgen een `soortgroep` via mapping en een numerieke bedekking (`bedekkingsgraad_proc`).  
+    **Stap 3 — Teller:** per jaar en soortgroep wordt bedekking opgeteld.  
+    **Stap 4 — Noemer:** totale bedekking (WATPTN) wordt per monstername (`CollectieReferentie`) 1× meegeteld en per jaar gesommeerd.  
+    **Stap 5 — Fractie:** teller / noemer = fractie t.o.v. totale bedekking.  
+
+    **Waarom geen 100%-stack?**  
+    De staafhoogte mag <1 blijven: zo zie je ook welk deel van WATPTN niet door de getoonde soortgroepen wordt verklaard.
+    """)
     
     # 1. Data voorbereiden: Filter RWS codes & 'Groep' types eruit
     df_species_raw = df_trend_base[~df_trend_base['soort'].isin(RWS_GROEIVORM_CODES)].copy()
@@ -188,37 +313,57 @@ if selected_trend_bodies:
         # 2. Voeg soortgroepen toe (Chariden, etc.)
         df_species_mapped = add_species_group_columns(df_species_raw)
         
-        # 3. Aggregeren voor 100% Stacked Bar
-        # Som van bedekking per jaar per soortgroep binnen de geselecteerde waterlichamen
-        df_trend_species = df_species_mapped.groupby(['jaar', 'soortgroep'])['bedekkingsgraad_proc'].sum().reset_index()
+        # 3. Aggregeren: som van bedekking per jaar per soortgroep (teller)
+        df_trend_species = (
+            df_species_mapped
+            .groupby(['jaar', 'soortgroep'])['bedekkingsgraad_proc']
+            .sum()
+            .reset_index()
+        )
 
-        # 4. Bereken totaal per jaar voor normalisatie
-        df_totals = df_trend_species.groupby('jaar')['bedekkingsgraad_proc'].transform('sum')
-        
-        # 5. Bereken percentage aandeel
-        df_trend_species['percentage_relatief'] = 0.0
-        mask = df_totals > 0
-        df_trend_species.loc[mask, 'percentage_relatief'] = (
-            df_trend_species.loc[mask, 'bedekkingsgraad_proc'] / df_totals[mask]
-        ) * 100
+        # 4. Noemer: totale bedekking (WATPTN) per jaar, zonder dubbel tellen per monstername
+        df_year_totals = (
+            df_species_mapped
+            .groupby(['jaar', 'CollectieReferentie'])['totaal_bedekking_locatie']
+            .first()
+            .reset_index()
+        )
 
-        # 6. Grafiek tekenen
+        df_year_totals = (
+            df_year_totals
+            .groupby('jaar')['totaal_bedekking_locatie']
+            .sum()
+            .reset_index()
+            .rename(columns={'totaal_bedekking_locatie': 'totaal_bedekking_jaar'})
+        )
+
+        # 5. Merge noemer in df_trend_species en bereken fractie t.o.v. WATPTN
+        df_trend_species = df_trend_species.merge(df_year_totals, on='jaar', how='left')
+
+        df_trend_species['fractie_tov_totaal'] = 0.0
+        mask = df_trend_species['totaal_bedekking_jaar'].notna() & (df_trend_species['totaal_bedekking_jaar'] > 0)
+        df_trend_species.loc[mask, 'fractie_tov_totaal'] = (
+            df_trend_species.loc[mask, 'bedekkingsgraad_proc'] / df_trend_species.loc[mask, 'totaal_bedekking_jaar']
+        )
+
+        # 6. Grafiek tekenen (NIET 100%-genormaliseerd; fractie t.o.v. totale bedekking)
         fig_stack = px.bar(
             df_trend_species,
             x='jaar',
-            y='percentage_relatief',
+            y='fractie_tov_totaal',
             color='soortgroep',
-            title='Relatieve samenstelling soortgroepen van geselecteerde waterlichamen',
+            title='Samenstelling soortgroepen t.o.v. totale bedekking (WATPTN) – geselecteerde waterlichamen',
             labels={
-                'percentage_relatief': 'Aandeel (%)', 
+                'fractie_tov_totaal': 'Fractie van totale bedekking',
                 'jaar': 'Jaar',
                 'soortgroep': 'Groep'
             },
             color_discrete_sequence=px.colors.qualitative.Safe,
             height=500
         )
-        
-        fig_stack.update_layout(yaxis=dict(range=[0, 100], ticksuffix="%"))
+
+        fig_stack.update_layout(yaxis=dict(range=[0, 1]))
+
         st.plotly_chart(fig_stack, use_container_width=True)
     else:
         st.info("Geen soort-specifieke data gevonden voor deze selectie.")
