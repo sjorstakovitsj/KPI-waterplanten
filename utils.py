@@ -1185,8 +1185,18 @@ def render_swipe_map_html(
     center: [{center_lon}, {center_lat}],
     zoom: {zoom},
     attributionControl: true,
-    interactive: false
+    interactive: true
   }});
+
+    // Disable interacties zodat rechts niet “los” bedienbaar wordt
+    mapRight.scrollZoom.disable();
+    mapRight.boxZoom.disable();
+    mapRight.dragRotate.disable();
+    mapRight.dragPan.disable();
+    mapRight.keyboard.disable();
+    mapRight.doubleClickZoom.disable();
+    mapRight.touchZoomRotate.disable();
+
 
   // Sync view (links -> rechts)
   function sync() {{
@@ -1333,10 +1343,38 @@ def render_swipe_map_html(
     }});
   }});
 
-  mapRight.on('load', () => {{
-    // overlay (rechts) normaal, niet dimmen
-    addPoints(mapRight, 'rightPts', 'rightLayer', rightData, false);
+mapRight.on('load', () => {{
+  // overlay (rechts) normaal, niet dimmen
+  addPoints(mapRight, 'rightPts', 'rightLayer', rightData, false);
+
+  // tooltip op rechterpuntlaag
+  const popupR = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
+
+  mapRight.on('mousemove', 'rightLayer', (e) => {{
+    mapRight.getCanvas().style.cursor = 'pointer';
+    if (!e.features || !e.features.length) return;
+
+    const p = e.features[0].properties;
+    const v =
+      (p.value === null || p.value === undefined || p.value === "" || isNaN(Number(p.value)))
+        ? "n.v.t."
+        : Number(p.value).toFixed(1);
+
+    popupR
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<b>Locatie:</b> ${{p.locatie_id}}<br/>` +
+        `<b>Waarde ({year_right}):</b> ${{v}}`
+      )
+      .addTo(mapRight);
   }});
+
+  mapRight.on('mouseleave', 'rightLayer', () => {{
+    mapRight.getCanvas().style.cursor = '';
+    popupR.remove();
+  }});
+}});
+
 
   // --- Swipe mechanics ---
   const wrap = document.getElementById('wrap');

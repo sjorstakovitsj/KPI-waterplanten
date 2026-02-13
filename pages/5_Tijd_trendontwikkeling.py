@@ -49,6 +49,17 @@ selected_species = st.sidebar.selectbox(
 )
 species_is_selected = (selected_species and selected_species != "— Alle soorten —")
 
+# 2b) Plantgroep filter (nieuw) – alleen zinvol als GEEN individuele soort gekozen is
+st.sidebar.subheader("Extra kaartfilter")
+
+if species_is_selected:
+    st.sidebar.caption("Plantgroep-filter is uitgeschakeld bij een gekozen soort.")
+    show_ondergedoken = st.sidebar.checkbox("Onder­gedoken waterplanten", value=False, disabled=True)
+    show_chariden = st.sidebar.checkbox("Chariden (kranswieren)", value=False, disabled=True)
+else:
+    show_ondergedoken = st.sidebar.checkbox("Onder­gedoken waterplanten", value=False)
+    show_chariden = st.sidebar.checkbox("Chariden (kranswieren)", value=False)
+
 # 3) Metriek-keuze (als soort is gekozen, beperken we tot bedekking)
 if species_is_selected:
     metric_options = {
@@ -81,6 +92,37 @@ if species_is_selected:
 # Zorg dat bedekking numeriek is
 if 'bedekking_pct' in df_filtered.columns:
     df_filtered['bedekking_pct'] = pd.to_numeric(df_filtered['bedekking_pct'], errors='coerce')
+    
+# -------------------------------------------------------------
+# Extra filter: plantgroepen (ondergedoken / chariden)
+# Alleen toepassen als GEEN individuele soort is gekozen
+# -------------------------------------------------------------
+if not species_is_selected:
+    # Chariden herkennen op basis van (Latijnse) genusnamen in kolom 'soort'
+    # (Chara, Nitella, Nitellopsis, Tolypella) – zie mapping in utils.py
+    chara_genera = ("Chara", "Nitella", "Nitellopsis", "Tolypella")
+    mask_chariden = (
+        df_filtered["soort"].fillna("").astype(str).str.strip()
+        .str.startswith(chara_genera)
+    )
+
+    # Onder­gedoken waterplanten komen in jouw data als groeivorm "Ondergedoken"
+    # (GROWTH_FORM_MAPPING: SUBMSPTN -> Ondergedoken) en zijn doorgaans type='Groep'
+    mask_ondergedoken = (
+        (df_filtered.get("groeivorm", pd.Series(False, index=df_filtered.index)) == "Ondergedoken")
+    )
+
+    # Als één of beide checkboxes aangevinkt zijn, filter daarop
+    if show_ondergedoken or show_chariden:
+        mask = pd.Series(False, index=df_filtered.index)
+
+        if show_ondergedoken:
+            mask |= mask_ondergedoken
+
+        if show_chariden:
+            mask |= mask_chariden
+
+        df_filtered = df_filtered[mask].copy()
 
 if df_filtered.empty:
     st.warning("Geen data beschikbaar voor deze selectie.")
@@ -196,13 +238,16 @@ else:
         df_left = df_map_source[df_map_source["jaar"] == year_left][
             ["locatie_id", "lat", "lon", selected_metric]
         ].copy()
-
         df_right = df_map_source[df_map_source["jaar"] == year_right][
             ["locatie_id", "lat", "lon", selected_metric]
         ].copy()
 
-        gj_left = df_to_geojson_points(df_left, value_col=selected_metric, id_col="locatie_id")
-        gj_right = df_to_geojson_points(df_right, value_col=selected_metric, id_col="locatie_id")
+        # 👉 Standaardiseer de kolomnaam voor GeoJSON-properties
+        df_left = df_left.rename(columns={selected_metric: "value"})
+        df_right = df_right.rename(columns={selected_metric: "value"})
+
+        gj_left = df_to_geojson_points(df_left, value_col="value", id_col="locatie_id")
+        gj_right = df_to_geojson_points(df_right, value_col="value", id_col="locatie_id")
 
         # bounds (links + rechts samen) -> autozoom
         df_bounds = pd.concat([df_left, df_right], ignore_index=True).dropna(subset=["lat", "lon"])
@@ -375,3 +420,123 @@ if len(available_years) >= 2:
     st.plotly_chart(fig_bar, use_container_width=True)
 else:
     st.info("Niet genoeg jaren aan data voor een vergelijking.")
+    
+# -------------------------------------------------------------
+# 5) TOP 50 HEATMAP
+# -------------------------------------------------------------
+st.divider()
+st.subheader("Soortenaanwezigheid heatmap (top 50)")
+
+# Basis voor heatmap: alleen filter op waterlichamen (niet op selected_species)
+df_heat_base = df[df["Waterlichaam"].isin(selected_bodies)] if selected_bodies else df.copy()
+
+# Alleen individuele soorten en bij voorkeur alleen bedekking (BEDKG)
+df_species_only = df_heat_base[df_heat_base["type"] == "Soort"].copy()
+if "Grootheid" in df_species_only.columns:
+    df_species_only = df_species_only[df_species_only["Grootheid"] == "BEDKG"].copy()
+
+# Zorg dat bedekking numeriek is
+if "bedekking_pct" in df_species_only.columns:
+    df_species_only["bedekking_pct"] = pd.to_numeric(df_species_only["bedekking_pct"], errors="coerce")
+
+if df_species_only.empty:
+    st.info("Geen soortdata gevonden voor de huidige selectie.")
+else:
+    # 1) Top 50 bepalen o.b.v. gemiddelde bedekking over alle jaren
+# --- Gewogen TOP 50: elk (locatie_id, jaar) telt even zwaar ---
+# 1) eerst per soort-locatie-jaar een gemiddelde bedekking
+    df_cells = (
+        df_species_only
+        .groupby(["soort", "locatie_id", "jaar"])["bedekking_pct"]
+        .mean()
+        .reset_index()
+    )
+
+    # 2) score per soort: gemiddelde over unieke locatie-jaar cellen
+    weighted_score = (
+        df_cells.groupby("soort")["bedekking_pct"]
+        .mean()
+        .sort_values(ascending=False)
+    )
+
+    top_species = weighted_score.head(50).index
+
+    # 2) Filter op top 50
+    df_top_heatmap = df_species_only[df_species_only["soort"].isin(top_species)].copy()
+
+    # 3) Aggregeer per soort en jaar
+    heatmap_data = (
+        df_top_heatmap.groupby(["soort", "jaar"])["bedekking_pct"]
+        .mean()
+        .reset_index()
+    )
+
+    if heatmap_data.empty:
+        st.warning("Geen data beschikbaar voor de heatmap.")
+    else:
+        # Pivot naar matrix
+        heatmap_matrix = (
+            heatmap_data.pivot(index="soort", columns="jaar", values="bedekking_pct")
+            .fillna(0)
+        )
+
+        # --- Maskers maken ---
+        # 0-cellen (exact nul) markeren
+        zero_mask = (heatmap_matrix == 0)
+
+        # Voor de "groene" laag: zet nullen op NaN zodat ze niet groen kleuren
+        matrix_green = heatmap_matrix.mask(zero_mask, other=np.nan)
+
+        # --- Basis heatmap (alleen >0) ---
+        fig_heat = px.imshow(
+            matrix_green,
+            color_continuous_scale="Greens",
+            aspect="auto",
+            title="Ontwikkeling bedekking (top 50 meest voorkomende soorten)",
+            labels=dict(x="Jaar", y="Soort", color="Gem. Bedekking (%)")
+        )
+
+        # --- Grijze laag voor 0-cellen ---
+        # Maak een overlay-matrix: 1 op plekken waar 0 zit, anders NaN
+        matrix_zero = zero_mask.astype(int).replace({0: np.nan})
+
+        fig_heat.add_trace(
+            go.Heatmap(
+                z=matrix_zero.values,
+                x=heatmap_matrix.columns,
+                y=heatmap_matrix.index,
+                colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(200,200,200,0.65)"]],
+                showscale=False,
+                hoverinfo="skip"
+            )
+        )
+
+        # --- Gearceerd effect: X-markers bovenop 0-cellen ---
+        # Coördinaten van 0-cellen (y=soortnaam, x=jaar)
+        ys, xs = np.where(zero_mask.values)
+
+        x_vals = [heatmap_matrix.columns[i] for i in xs]
+        y_vals = [heatmap_matrix.index[i] for i in ys]
+
+        fig_heat.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode="markers",
+                marker=dict(
+                    symbol="x",
+                    size=6,
+                    color="rgba(120,120,120,0.55)"
+                ),
+                showlegend=False,
+                hoverinfo="skip"
+            )
+        )
+
+        # Leesbaarheid
+        fig_heat.update_layout(
+            height=1200,
+            yaxis=dict(side="left")
+        )
+
+        st.plotly_chart(fig_heat, use_container_width=True)

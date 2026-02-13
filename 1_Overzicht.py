@@ -67,6 +67,7 @@ else:
 # Gebruikt 'totaal_bedekking_locatie' (de WATPTN waarde uit utils.py)
 avg_bedekking, d_bedekking = calculate_kpi(df_year_matched, df_prev_matched, 'totaal_bedekking_locatie', is_loc_metric=True)
 avg_doorzicht, d_doorzicht = calculate_kpi(df_year_matched, df_prev_matched, 'doorzicht_m', is_loc_metric=True)
+avg_diepte, d_diepte = calculate_kpi(df_year_matched, df_prev_matched, 'diepte_m', is_loc_metric=True)
 
 # Soortenrijkdom: liefst alleen individuele soorten tellen
 RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
@@ -157,10 +158,19 @@ with c_pie2:
             st.plotly_chart(fig_trofie, use_container_width=True)
 
 # KPI Weergave
-c1, c2, c3 = st.columns(3)
-with c1: st.metric("gem. totale bedekking", f"{avg_bedekking:.1f}%", f"{d_bedekking:.1f}%")
-with c2: st.metric("gem. doorzicht", f"{avg_doorzicht:.2f}m", f"{d_doorzicht:.2f}m")
-with c3: st.metric("gem. soortenrijkdom", n_soorten, d_soorten)
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.metric("gem. totale bedekking", f"{avg_bedekking:.1f}%", f"{d_bedekking:.1f}%")
+
+with c2:
+    st.metric("gem. doorzicht", f"{avg_doorzicht:.2f} m", f"{d_doorzicht:.2f} m")
+
+with c3:
+    st.metric("gem. diepte", f"{avg_diepte:.2f} m", f"{d_diepte:.2f} m")
+
+with c4:
+    st.metric("gem. soortenrijkdom", n_soorten, d_soorten)
 
 
 st.divider()

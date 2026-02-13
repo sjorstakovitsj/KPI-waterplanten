@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from utils import load_data
@@ -13,21 +14,57 @@ if df.empty:
     st.error("Geen data beschikbaar.")
     st.stop()
 
-year_pca = st.selectbox("Kies jaar analyse", sorted(df['jaar'].unique()))
+# Jaren: meest recent eerst, en standaard selecteren
+years = sorted(df['jaar'].dropna().unique(), reverse=True)
+year_pca = st.selectbox("Kies jaar analyse", years, index=0)
+
+df_year = df[df['jaar'] == year_pca].copy()
+
+# Ratio: doorzicht / diepte (bescherm tegen diepte <= 0 of NaN)
+df_year["zicht_per_diepte"] = np.where(
+    (df_year["diepte_m"].notna()) & (df_year["diepte_m"] > 0) & (df_year["doorzicht_m"].notna()),
+    df_year["doorzicht_m"] / df_year["diepte_m"],
+    np.nan
+)
 
 # --- SCATTERPLOTS ---
 c1, c2 = st.columns(2)
 with c1:
-    fig_scat1 = px.scatter(df[df['jaar']==year_pca], x="diepte_m", y="bedekking_pct", color="groeivorm", 
-                           title="Diepte vs Bedekking")
+    fig_scat1 = px.scatter(
+        df_year,
+        x="zicht_per_diepte",
+        y="bedekking_pct",
+        color="groeivorm",
+        title="Doorzicht/Diepte vs Bedekking",
+        labels={"zicht_per_diepte": "Doorzicht / Diepte (-)", "bedekking_pct": "Bedekking (%)"}
+    )
     st.plotly_chart(fig_scat1, use_container_width=True)
 with c2:
     # Aggregeren per locatie voor soortenrijkdom
-    df_div = df[df['jaar']==year_pca].groupby('locatie_id').agg({
-        'soort': 'nunique', 'doorzicht_m': 'mean'
-    }).reset_index()
-    fig_scat2 = px.scatter(df_div, x="doorzicht_m", y="soort", 
-                           title="Doorzicht vs Soortenrijkdom")
+    df_div = (
+        df_year
+        .groupby("locatie_id")
+        .agg({
+            "soort": "nunique",
+            "doorzicht_m": "mean",
+            "diepte_m": "mean"
+        })
+        .reset_index()
+    )
+
+    df_div["zicht_per_diepte"] = np.where(
+        (df_div["diepte_m"].notna()) & (df_div["diepte_m"] > 0) & (df_div["doorzicht_m"].notna()),
+        df_div["doorzicht_m"] / df_div["diepte_m"],
+        np.nan
+    )
+
+    fig_scat2 = px.scatter(
+        df_div,
+        x="zicht_per_diepte",
+        y="soort",
+        title="Doorzicht/Diepte vs Soortenrijkdom",
+        labels={"zicht_per_diepte": "Doorzicht / Diepte (-)", "soort": "Soortenrijkdom (#)"}
+    )
     st.plotly_chart(fig_scat2, use_container_width=True)
 
 # --- PCA ANALYSE ---

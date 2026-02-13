@@ -126,43 +126,162 @@ with c1:
 
 with c2:
     st.subheader(f"Profiel {selected_year}")
-    
-    if not df_radar_source.empty:
-        # Data voorbereiden voor radar: gemiddelde of som afhankelijk van bron
-        if use_aggregated_species:
-            # Bij soorten moeten we eerst sommeren per locatie, dan gemiddelde nemen? 
-            # Voor radar over het hele gebied: Totale som per groeivorm / Aantal locaties is complex.
-            # Eenvoudige benadering voor profiel: Verdeling van de totale bedekking.
-            
-            # Stap 1: Sommeer per groeivorm
-            current_dist = df_radar_source.groupby('groeivorm')['bedekking_pct'].sum()
-        else:
-            # Bij RWS codes: Gemiddelde bedekking
-            current_dist = df_radar_source.groupby('groeivorm')['bedekking_pct'].mean()
-            
-        # Normaliseren naar relatieve verdeling (0-1) voor de vorm
-        total_val = current_dist.sum()
-        if total_val > 0:
-            current_dist = current_dist / total_val
 
-        # Referentie (voorbeeld streefbeeld helder water)
-        ref_dict = {'Ondergedoken': 0.6, 'Drijvend': 0.2, 'Emergent': 0.15, 'Draadalgen': 0.05}
-        
-        categories = GROWTH_ORDER
-        r_vals = [current_dist.get(c, 0) for c in categories]
-        ref_vals = [ref_dict.get(c, 0) for c in categories]
-        
+    # NIEUW: kies welke parameter je in de spingrafiek wilt zien
+    radar_mode = st.selectbox(
+        "Kies spingrafiek voor",
+        ["Groeivormen", "Soortgroepen", "Trofieniveau", "KRW score"],
+        index=0,
+        key="radar_mode_choice"
+    )
+
+    def _normalize_series(s: pd.Series) -> pd.Series:
+        s = s.fillna(0.0)
+        total = float(s.sum())
+        return (s / total) if total > 0 else s
+
+    # --- Bouw verdeling afhankelijk van gekozen radar_mode ---
+    current_dist = pd.Series(dtype=float)
+    categories = []
+
+    if radar_mode == "Groeivormen":
+        # Bestaande logica (exact zoals je al deed)
+        if not df_radar_source.empty:
+            if use_aggregated_species:
+                # Bij soorten: verdeling op basis van totale bedekking per groeivorm
+                current_dist = df_radar_source.groupby("groeivorm")["bedekking_pct"].sum()
+            else:
+                # Bij RWS-codes: gemiddelde bedekking per groeivorm
+                current_dist = df_radar_source.groupby("groeivorm")["bedekking_pct"].mean()
+
+            current_dist = _normalize_series(current_dist)
+
+            # Vaste volgorde voor groeivormen
+            categories = GROWTH_ORDER
+
+            # Referentie is alleen bekend voor groeivormen (zoals nu)
+            ref_dict = {"Ondergedoken": 0.6, "Drijvend": 0.2, "Emergent": 0.15, "Draadalgen": 0.05}
+            ref_vals = [ref_dict.get(c, 0) for c in categories]
+        else:
+            st.info(f"Geen data beschikbaar voor radarplot in {selected_year}")
+            categories = GROWTH_ORDER
+            ref_vals = [0] * len(categories)
+
+    elif radar_mode == "Soortgroepen":
+        # Soortgroepen: alleen echte soorten, RWS codes en type='Groep' eruit (zoals in je onderste grafiek) [1](https://rijkswaterstaat-my.sharepoint.com/personal/ben_bildirici_rws_nl/Documents/Microsoft%20Copilot%20Chat%20Files/4_Groeivormen_soortgroepen.py)
+        df_species_raw = df_filtered[~df_filtered["soort"].isin(RWS_GROEIVORM_CODES)].copy()
+        df_species_raw = df_species_raw[df_species_raw["type"] != "Groep"].copy()
+        df_species_raw = df_species_raw[df_species_raw["jaar"] == selected_year].copy()
+
+        if df_species_raw.empty:
+            st.info(f"Geen soortdata beschikbaar voor soortgroepen in {selected_year}.")
+        else:
+            df_species_mapped = add_species_group_columns(df_species_raw)
+            # bedekkingsgraad_proc komt uit add_species_group_columns()
+            current_dist = df_species_mapped.groupby("soortgroep")["bedekkingsgraad_proc"].sum()
+            current_dist = _normalize_series(current_dist)
+
+            # Categorievolgorde: op aandeel (groot → klein) zodat het leesbaar blijft
+            categories = list(current_dist.sort_values(ascending=False).index)
+
+        ref_vals = None  # geen referentie bekend
+
+    elif radar_mode == "Trofieniveau":
+        df_h = df_filtered[(df_filtered["type"] == "Soort") & (df_filtered["jaar"] == selected_year)].copy()
+        if "Grootheid" in df_h.columns:
+            df_h = df_h[df_h["Grootheid"] == "BEDKG"].copy()
+
+        df_h = df_h.dropna(subset=["trofisch_niveau"])
+        if df_h.empty:
+            st.info(f"Geen data beschikbaar voor trofieniveau in {selected_year}.")
+        else:
+            df_h["bedekking_num"] = pd.to_numeric(df_h["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
+            current_dist = df_h.groupby("trofisch_niveau")["bedekking_num"].sum()
+            current_dist = _normalize_series(current_dist)
+
+            # Optionele bekende volgorde (als aanwezig), rest erachter
+            preferred = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos"]
+            keep = [x for x in preferred if x in current_dist.index]
+            rest = [x for x in current_dist.sort_values(ascending=False).index if x not in keep]
+            categories = keep + rest
+
+        ref_vals = None  # geen referentie bekend
+
+    else:  # "KRW score"
+        df_h = df_filtered[(df_filtered["type"] == "Soort") & (df_filtered["jaar"] == selected_year)].copy()
+        if "Grootheid" in df_h.columns:
+            df_h = df_h[df_h["Grootheid"] == "BEDKG"].copy()
+
+        if df_h.empty:
+            st.info(f"Geen data beschikbaar voor KRW score in {selected_year}.")
+        else:
+            # Gebruik krw_class als aanwezig; anders afleiden uit krw_score (zelfde idee als elders in de app)
+            if "krw_class" in df_h.columns:
+                df_h["krw_cat"] = df_h["krw_class"]
+            else:
+                df_h["krw_cat"] = pd.cut(
+                    df_h["krw_score"],
+                    bins=[0, 2, 4, 5],
+                    labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+                    include_lowest=True
+                )
+
+            df_h = df_h.dropna(subset=["krw_cat"])
+            df_h["bedekking_num"] = pd.to_numeric(df_h["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
+
+            current_dist = df_h.groupby("krw_cat")["bedekking_num"].sum()
+            current_dist = _normalize_series(current_dist)
+
+            # Vaste volgorde als beschikbaar
+            order = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"]
+            categories = [x for x in order if x in current_dist.index]
+
+        ref_vals = None  # geen referentie bekend
+
+    # --- Plotten ---
+    if current_dist is not None and len(categories) > 0:
+        r_vals = [float(current_dist.get(c, 0.0)) for c in categories]
+
         fig_radar = go.Figure()
         fig_radar.add_trace(go.Scatterpolar(
-            r=r_vals, theta=categories, fill='toself', name=f'Data {selected_year}'
+            r=r_vals,
+            theta=categories,
+            fill='toself',
+            name=f'Data {selected_year}',
+            hovertemplate="<b>%{theta}</b><br>Aandeel: %{r:.0%}<extra></extra>"
         ))
-        fig_radar.add_trace(go.Scatterpolar(
-            r=ref_vals, theta=categories, fill='toself', name='Referentie', line=dict(dash='dot')
-        ))
+
+        # Alleen groeivormen hebben referentie
+        if radar_mode == "Groeivormen":
+            fig_radar.add_trace(go.Scatterpolar(
+                r=ref_vals,
+                theta=categories,
+                fill='toself',
+                name='Referentie',
+                line=dict(dash='dot'),
+                hovertemplate="<b>%{theta}</b><br>Referentie: %{r:.0%}<extra></extra>"
+            ))
+        else:
+            st.caption("ℹ️ Geen referentieprofiel beschikbaar voor deze parameter (alleen voor groeivormen).")
+
+        # Range: neem max van data, en voor groeivormen ook referentie
+        max_r = max(r_vals) if r_vals else 1.0
+        if radar_mode == "Groeivormen" and ref_vals is not None:
+            max_r = max(max_r, max(ref_vals) if ref_vals else 1.0)
+
         fig_radar.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, max(max(r_vals), 0.6)])),
-            showlegend=True, height=400, margin=dict(l=40, r=40, t=20, b=20)
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 1],
+                    tickformat=".0%"
+                )
+            ),
+            showlegend=True,
+            height=400,
+            margin=dict(l=40, r=40, t=20, b=20)
         )
+
         st.plotly_chart(fig_radar, use_container_width=True)
     else:
         st.info(f"Geen data beschikbaar voor radarplot in {selected_year}")

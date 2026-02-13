@@ -63,13 +63,13 @@ selected_coverage_type = None
 if analysis_level == "groepen & aggregaties":
 
     # Optie A1: Algemene aggregaties
-    opt_general = ["totale bedekking", "Groeivormen (pie)", "Trofieniveau", "KRW score"]
+    opt_general = ["totale bedekking", "Groeivormen (pie)", "Trofieniveau", "KRW score", "soortgroepen"]
 
     # Optie A2: Taxonomische soortgroepen (uit verrijkte dataset)
     species_groups_list = sorted(df_species_groups['soortgroep'].dropna().unique())
 
     # NB: losse groeivormen NIET meer als selectiekeuze aanbieden
-    all_options = opt_general + species_groups_list
+    all_options = opt_general
 
     selected_coverage_type = st.sidebar.selectbox("selecteer groep", options=all_options)
 
@@ -167,7 +167,7 @@ else:
 
 # Stap 3: Merge alles samen
 # Left join op locaties: zodat we OOK punten zien waar wel diepte is gemeten, maar de soort NIET voorkomt (waarde 0)
-PIE_TYPES = ["KRW score", "Trofieniveau", "Groeivormen (pie)"]
+PIE_TYPES = ["KRW score", "Trofieniveau", "Groeivormen (pie)", "soortgroepen"]
 
 # Voor pie-lagen: geen merge nodig; we gebruiken df_locs als basis
 if analysis_level == "groepen & aggregaties" and layer_mode == "Vegetatie" and selected_coverage_type in PIE_TYPES:
@@ -205,9 +205,15 @@ elif layer_mode == "Doorzicht":
     st.caption("Legenda: Bruin (Troebel) → Groen (Helder)")
 
 # Map aanmaken
-if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and selected_coverage_type in ["KRW score", "Trofieniveau", "Groeivormen (pie)"]:
+# Map aanmaken
+if (
+    layer_mode == "Vegetatie"
+    and analysis_level == "groepen & aggregaties"
+    and selected_coverage_type in ["KRW score", "Trofieniveau", "Groeivormen (pie)", "soortgroepen"]
+):
     df_locs_for_map = df_locs.copy()
 
+    # 1) Groeivormen (pie) -----------------------------------------------------
     if selected_coverage_type == "Groeivormen (pie)":
         # Groeivormen komen uit de RWS-groepregels (type='Groep')
         df_forms = df_filtered[df_filtered["type"] == "Groep"].copy()
@@ -222,18 +228,25 @@ if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and s
             .unstack(fill_value=0)
         )
 
-        counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+        # Optioneel: schaal terug als totalen per locatie > 100 (behoud relatieve verdeling)
+        counts_by_loc = {}
+        for loc, row in pivot.iterrows():
+            d = row.to_dict()
+            total = sum(d.values())
+            if total > 100 and total > 0:
+                factor = 100 / total
+                d = {k: v * factor for k, v in d.items()}
+            counts_by_loc[loc] = d
 
-        # Kleuren + volgorde (zelfde gevoel als in je groeivorm grafieken)
+        # Kleuren groeivormen (jouw voorkeuren)
         color_map = {
             "Ondergedoken": "#2ca02c",   # groen
-            "Emergent": "#ffd700",       # geel (goud)
+            "Emergent": "#ffd700",       # geel
             "Draadalgen": "#c2a5cf",     # lichtpaars
             "Drijvend": "#ff7f0e",       # oranje
             "FLAB": "#d62728",           # rood
             "Kroos": "#8c510a",          # bruin
         }
-
         order = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
 
         map_obj = create_pie_map(
@@ -244,16 +257,61 @@ if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and s
             order=order,
             size_px=30,
             zoom_start=10,
-            fixed_total=100,          # <-- belangrijk
-            fill_gap=True,            # <-- laat rest leeg (transparant)
-            gap_color="transparent"   # <-- expliciet
-)
+            fixed_total=100,
+            fill_gap=True,
+            gap_color="transparent",
+            # alleen als je dit in utils hebt toegevoegd:
+            # empty_fill_color="transparent",
+        )
 
-    elif selected_coverage_type == "KRW score":
-        # Individuele soorten (records) -> verdeling per KRW-klasse per locatie
+    # 2) Trofieniveau (pie op records) ----------------------------------------
+    elif selected_coverage_type == "Trofieniveau":
         df_species = df_filtered[
-            (df_filtered["type"] == "Soort") &
-            (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
+            (df_filtered["type"] == "Soort")
+            & (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
+        ].copy()
+
+        # Alleen records met trofisch niveau
+        df_species = df_species.dropna(subset=["trofisch_niveau"])
+
+        if df_species.empty:
+            counts_by_loc = {}
+        else:
+            pivot = (
+                df_species.groupby(["locatie_id", "trofisch_niveau"])
+                .size()
+                .unstack(fill_value=0)
+            )
+            counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+
+        # Trofie kleuren (zoals eerder afgesproken)
+        color_map = {
+            "oligotroof": "#2ca02c",        # groen
+            "mesotroof": "#1f77b4",         # blauw
+            "eutroof": "#ff7f0e",           # oranje
+            "sterk eutroof": "#d62728",     # rood
+            "brak": "#ffd700",              # geel
+            "marien": "#8c510a",            # bruin
+            "kroos": "#7f7f7f",             # grijs (optioneel)
+            "Onbekend": "#999999",
+        }
+        order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend"]
+
+        map_obj = create_pie_map(
+            df_locs_for_map,
+            counts_by_loc=counts_by_loc,
+            label="Trofieniveau (records)",
+            color_map=color_map,
+            order=order,
+            size_px=30,
+            zoom_start=10
+        )
+
+    # 3) KRW score (pie op records) -------------------------------------------
+    elif selected_coverage_type == "KRW score":
+        df_species = df_filtered[
+            (df_filtered["type"] == "Soort")
+            & (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
         ].copy()
 
         # Gebruik bestaande krw_class als die er is; anders afleiden uit krw_score
@@ -267,14 +325,16 @@ if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and s
                 include_lowest=True
             )
 
-        # Alleen records met categorie
         df_species = df_species.dropna(subset=["krw_cat"])
 
-        # counts per locatie per categorie
         if df_species.empty:
             counts_by_loc = {}
         else:
-            pivot = df_species.groupby(["locatie_id", "krw_cat"]).size().unstack(fill_value=0)
+            pivot = (
+                df_species.groupby(["locatie_id", "krw_cat"])
+                .size()
+                .unstack(fill_value=0)
+            )
             counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
 
         color_map = {
@@ -294,43 +354,70 @@ if layer_mode == "Vegetatie" and analysis_level == "groepen & aggregaties" and s
             zoom_start=10
         )
 
-    else:  # "Trofieniveau"
-        # Individuele soorten (records) -> verdeling per trofieniveau per locatie
-        df_species = df_filtered[
-            (df_filtered["type"] == "Soort") &
-            (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
-        ].copy()
+    # 4) Soortgroepen (pie op bedekking, gedeeltelijk gevuld t.o.v. 100) -------
+    else:  # selected_coverage_type == "soortgroepen"
+        # df_species_groups is al aangemaakt via add_species_group_columns(df_filtered) in je script
+        df_sg = df_species_groups.copy()
 
-        # Alleen records met trofisch niveau
-        df_species = df_species.dropna(subset=["trofisch_niveau"])
+        # Bedekking numeriek maken
+        df_sg["bedekking_num"] = pd.to_numeric(df_sg["bedekkingsgraad_proc"], errors="coerce").fillna(0).clip(lower=0)
 
-        if df_species.empty:
-            counts_by_loc = {}
-        else:
-            pivot = df_species.groupby(["locatie_id", "trofisch_niveau"]).size().unstack(fill_value=0)
-            counts_by_loc = {loc: row.to_dict() for loc, row in pivot.iterrows()}
+        # Som bedekking per locatie en soortgroep
+        pivot = (
+            df_sg.groupby(["locatie_id", "soortgroep"])["bedekking_num"]
+            .sum()
+            .unstack(fill_value=0)
+        )
 
-        # Kleuren (pas gerust aan)
+        # Schaal terug als totalen > 100 (behoud relatieve verdeling)
+        counts_by_loc = {}
+        for loc, row in pivot.iterrows():
+            d = row.to_dict()
+            total = sum(d.values())
+            if total > 100 and total > 0:
+                factor = 100 / total
+                d = {k: v * factor for k, v in d.items()}
+            counts_by_loc[loc] = d
+
+        # Kleuren: voldoende onderscheid (kwalitatieve, contrasterende palette)
+        # LET OP: jouw soortgroepnamen zijn lowercase (o.a. "chariden", "iseotiden", etc.)
         color_map = {
-            "oligotroof": "#2ca02c",       # groen
-            "mesotroof": "#1f77b4",        # blauw
-            "eutroof": "#ff7f0e",          # oranje
-            "sterk eutroof": "#d62728",    # rood
-            "kroos": "#8c510a",
-            "brak": "#8073ac",
-            "marien": "#8073ac",           
-            "Onbekend": "#999999",
+            "chariden": "#1b9e77",
+            "iseotiden": "#7570b3",          # in utils staat deze spelling zo
+            "parvopotamiden": "#d95f02",
+            "magnopotamiden": "#66a61e",
+            "myriophylliden": "#e7298a",
+            "vallisneriiden": "#e6ab02",
+            "elodeiden": "#a6761d",
+            "stratiotiden": "#1f78b4",
+            "pepliden": "#b2df8a",
+            "batrachiiden": "#fb9a99",
+            "nymphaeiden": "#cab2d6",
+            "haptofyten": "#fdbf6f",
+            "Kenmerkende soort (N2000)": "#000000",
+            "Overig / Individueel": "#999999"
         }
-        order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "kroos", "brak", "marien", "Onbekend"]
+
+        # Volgorde (optioneel): alleen tonen wat in pivot voorkomt kan ook, maar dit houdt het consistent
+        order = [
+            "chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden",
+            "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden",
+            "nymphaeiden", "haptofyten", "Kenmerkende soort (N2000)", "Overig / Individueel"
+        ]
 
         map_obj = create_pie_map(
             df_locs_for_map,
             counts_by_loc=counts_by_loc,
-            label="Trofieniveau (records)",
+            label="Soortgroepen (% bedekking)",
             color_map=color_map,
             order=order,
             size_px=30,
-            zoom_start=10
+            zoom_start=10,
+            fixed_total=100,
+            fill_gap=True,
+            gap_color="transparent",
+            # belangrijk als je 0% volledig transparant wilt:
+            #empty_fill_color="transparent"
         )
 
 else:

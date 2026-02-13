@@ -1,19 +1,9 @@
-p1-4,7: aanwezigheid van kenmerkende soorten
-p3: definieren van indicatorsoorten: verstoring, slib, heldere wateren, eutroof
-p3: mapping maken van oligotroof, mesotroof, eutroof, hypertroof
-p6: diepte vs bedekking omdraaien en doorzicht vs soortenrijkdom ook
-p6: nog steeds niet helemaal duidelijk. Is pareto miss beter?
-p7: grafiek jaartallen op x-as op hele jaren
-
-
 Longlist:
 - algemene namen automatisch ook weergeven
 - Shapefiles gebruiken om overheen te plotten
 - indices toevoegen uit leidraad
 
 notities:
-tijdstip bemonstering > hoe later hoe beter. Oppervlaktebedekkingen maakt tijd in het jaar niet zo heel erg uit
-wel voor de uitlopers, vaatplanten, dus hoogte van de waterplanten. groeivormen dus
 temperatuursom kun je gebruiken om de weersinvloed op bedekkingsgraden te koppelen
 - herbiciden: sommering van concentraties
 - chlorofyl-A vergelijken met waterplanten voor biomassa indicatie algen versus waterplanten
@@ -21,13 +11,7 @@ temperatuursom kun je gebruiken om de weersinvloed op bedekkingsgraden te koppel
 - retentietijd: verversingstijd. wens voor later
 - nutriënten + herbiciden toevoegen aan waterplanten dashboard
 
-- trend groeivormen vs abiotiek. bij alle temporele analyses de abiotiek toevoegen
-- p2: taartdiagram van soortgroepen
-- p3 grafiek: bodemzicht toevoegen. ofwel doorzicht gedeeld door waterdiepte. 0.8 is nodig voor waterplanten. Die waarde inbouwen als vaste lijn
-- p3 heatmap: gunstige soorten groen. ongewenste soorten rood maken. alles wat niet telt voor KRW, grijs maken. Want die tellen niet mee
-- p4: spingrafiek ook kleuren zoals p3. 
-- p5: waarden van 2022 wordt niet weergegeven
+- trend groeivormen vs abiotiek. bij alle temporele (tijds-) analyses de abiotiek toevoegen
 - p5: heatmap die vlakdekkend wordt. kan dat? vragen aan Dick
-- p5: ondergedoken waterplanten en kranswieren toevoegen als selectiefilter shared sidebar
 
 MM 2019 goed, 2021 invloed markermeerdijken en 2024 weer hersteld
