@@ -285,6 +285,17 @@ with c2:
         st.plotly_chart(fig_radar, use_container_width=True)
     else:
         st.info(f"Geen data beschikbaar voor radarplot in {selected_year}")
+
+        
+    # ✅ HIER: bronregel onder de spingrafiek-sectie (ook als er geen data is)
+    if radar_mode == "Trofieniveau":
+        st.caption(
+            "Bron trofieniveau-indeling: Verhofstad et al. (2025) – *Waterplanten in Nederland: "
+            "Regionaal herstel, landelijke achteruitgang*. "
+            "https://www.floron.nl/Portals/1/Downloads/Publicaties/"
+            "VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf"
+    )
+
         
     with st.expander("ℹ️ Hoe lees ik deze spingrafiek?"):
         st.markdown("""

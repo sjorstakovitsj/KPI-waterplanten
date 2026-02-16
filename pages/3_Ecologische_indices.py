@@ -503,3 +503,12 @@ else:
         # Maak labels leesbaar
         fig.update_layout(height=650, yaxis=dict(side="left"))
         st.plotly_chart(fig, use_container_width=True)
+
+        # Toelichting specifiek voor Trofieniveau (onder de heatmap)
+if heatmap_param == "Trofieniveau":
+    st.caption(
+        "Bron trofieniveau-indeling: Verhofstad et al. (2025) – *Waterplanten in Nederland: "
+        "Regionaal herstel, landelijke achteruitgang*. "
+        "https://www.floron.nl/Portals/1/Downloads/Publicaties/"
+        "VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf"
+    )

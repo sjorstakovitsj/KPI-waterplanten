@@ -63,7 +63,7 @@ selected_coverage_type = None
 if analysis_level == "groepen & aggregaties":
 
     # Optie A1: Algemene aggregaties
-    opt_general = ["totale bedekking", "Groeivormen (pie)", "Trofieniveau", "KRW score", "soortgroepen"]
+    opt_general = ["totale bedekking", "Groeivormen", "Trofieniveau", "KRW score", "soortgroepen"]
 
     # Optie A2: Taxonomische soortgroepen (uit verrijkte dataset)
     species_groups_list = sorted(df_species_groups['soortgroep'].dropna().unique())
@@ -209,12 +209,12 @@ elif layer_mode == "Doorzicht":
 if (
     layer_mode == "Vegetatie"
     and analysis_level == "groepen & aggregaties"
-    and selected_coverage_type in ["KRW score", "Trofieniveau", "Groeivormen (pie)", "soortgroepen"]
+    and selected_coverage_type in ["KRW score", "Trofieniveau", "Groeivormen", "soortgroepen"]
 ):
     df_locs_for_map = df_locs.copy()
 
-    # 1) Groeivormen (pie) -----------------------------------------------------
-    if selected_coverage_type == "Groeivormen (pie)":
+    # 1) Groeivormen -----------------------------------------------------
+    if selected_coverage_type == "Groeivormen":
         # Groeivormen komen uit de RWS-groepregels (type='Groep')
         df_forms = df_filtered[df_filtered["type"] == "Groep"].copy()
 
@@ -425,6 +425,18 @@ else:
     map_obj = create_map(df_map_data, layer_mode, label_veg=selected_coverage_type)
 
 st_folium(map_obj, height=600, width=None)
+
+# --- Toelichting Trofieniveau (bron) ---
+if analysis_level == "groepen & aggregaties" and selected_coverage_type == "Trofieniveau":
+    with st.expander("ℹ️ Toelichting trofieniveau"):
+        st.markdown(
+            """
+            De indeling van soorten naar trofieniveau is gebaseerd op:
+            **Verhofstad et al. (2025)** – *Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang*.
+
+            🔗 [Download het rapport](https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf)
+            """
+        )
 
 # --- Extra kolommen per locatie: KRW-score en Trofieniveau ---
 df_species = df_filtered[

@@ -157,6 +157,20 @@ with c_pie2:
             fig_trofie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_trofie, use_container_width=True)
 
+        
+    # ✅ Onder de grafiek (of onder de melding als er geen data is)
+    with st.expander("ℹ️ Toelichting"):
+        st.markdown(
+            """
+            De indeling van soorten naar trofieniveau is gebaseerd op:
+            **Verhofstad et al. (2025)** – *Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang*.
+
+            🔗 [Download het rapport](https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf)
+            """
+        )
+
+    
+
 # KPI Weergave
 c1, c2, c3, c4 = st.columns(4)
 
