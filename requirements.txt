@@ -3,8 +3,9 @@ pandas
 numpy
 plotly
 scikit-learn
-folium
 streamlit-folium
 matplotlib
 watchdog
 folium
+duckdb>=0.10.0
+pyarrow>=14.0.0

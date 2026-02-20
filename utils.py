@@ -1,89 +1,93 @@
 # utils.py
+from __future__ import annotations
+
+import re
+import json
+import math
+from html import escape
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import folium 
-import re
-import json
-import math
-from html import escape
+import folium
+
+# Optionele high-performance dependencies
+try:
+    import duckdb  # type: ignore
+except Exception:
+    duckdb = None
+
+try:
+    import pyarrow as pa  # type: ignore
+    import pyarrow.parquet as pq  # type: ignore
+except Exception:
+    pa = None
+    pq = None
 
 
-# --- CONFIGURATIE ---
+# =============================================================================
+# CONFIGURATIE
+# =============================================================================
 FILE_PATH = "AquaDeskMeasurementExport_RWS_20260129204403.csv"
 SPECIES_LOOKUP_PATH = "Koppeltabel_score_namen.csv"
 
-# --- MAPPINGS ---
+BASE_DIR = Path(__file__).resolve().parent
+CACHE_DIR = BASE_DIR / ".cache_waterplanten"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+MEAS_PARQUET = CACHE_DIR / "measurements.parquet"
+FINAL_PARQUET = CACHE_DIR / "final_df.parquet"
+LOOKUP_PARQUET = CACHE_DIR / "species_lookup.parquet"
+
+# Nieuw: coord-cache op basis van (GeografieDatum, GeografieVorm)
+COORD_CACHE_PARQUET = CACHE_DIR / "coord_cache.parquet"
+
+# Verhoog dit als je pipeline-logica wijzigt (force rebuild via cache key)
+PIPELINE_VERSION = "2026-02-20_duckdb_parquet_coords_v2"
+
+
+# =============================================================================
+# MAPPINGS (ongewijzigd)
+# =============================================================================
 PROJECT_MAPPING = {
-    'MWTL_WOP': 'KRW',
-    'GRID_WOP': 'N2000'
+    "MWTL_WOP": "KRW",
+    "GRID_WOP": "N2000",
 }
 
 WATERBODY_MAPPING = {
-    'DRNMR': 'Drontermeer', 'EEMMR': 'Eemmeer', 'GOOIM': 'Gooimeer',
-    'GOUWZ': 'Gouwzee', 'IJMR': 'IJmeer', 'IJSMR': 'IJsselmeer',
-    'KETMR': 'Ketelmeer', 'MRKMR': 'Markermeer', 'NIJKN': 'Nijkerkernauw',
-    'NULDN': 'Nuldernauw', 'RNDMRN': 'Randmeren', 'RNDMR': 'Randmeren',
-    'VELWM': 'Veluwemeer', 'VOSSM': 'Vossemeer', 'WOLDW': 'Wolderwijd', 
-    'ZWTMR': 'Zwartemeer'
+    "DRNMR": "Drontermeer",
+    "EEMMR": "Eemmeer",
+    "GOOIM": "Gooimeer",
+    "GOUWZ": "Gouwzee",
+    "IJMR": "IJmeer",
+    "IJSMR": "IJsselmeer",
+    "KETMR": "Ketelmeer",
+    "MRKMR": "Markermeer",
+    "NIJKN": "Nijkerkernauw",
+    "NULDN": "Nuldernauw",
+    "RNDMRN": "Randmeren",
+    "RNDMR": "Randmeren",
+    "VELWM": "Veluwemeer",
+    "VOSSM": "Vossemeer",
+    "WOLDW": "Wolderwijd",
+    "ZWTMR": "Zwartemeer",
 }
 
-# Groeivormen mapping voor specifieke groepen
 GROWTH_FORM_MAPPING = {
-    'DRAADAGN': 'Draadalgen',
-    'DRIJFBPTN': 'Drijvend',
-    'EMSPTN': 'Emergent',
-    'SUBMSPTN': 'Ondergedoken',
-    'FLAB': 'FLAB',
-    'KROOS': 'Kroos'
+    "DRAADAGN": "Draadalgen",
+    "DRIJFBPTN": "Drijvend",
+    "EMSPTN": "Emergent",
+    "SUBMSPTN": "Ondergedoken",
+    "FLAB": "FLAB",
+    "KROOS": "Kroos",
 }
 
-# Lijst met codes die géén individuele soort zijn, maar een RWS-verzamelgroep
 EXCLUDED_SPECIES_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
 RWS_GROEIVORM_CODES = EXCLUDED_SPECIES_CODES
-
-def rd_to_wgs84(x, y):
-    """Converteert Rijksdriehoek (RD) coördinaten naar WGS84 (Lat/Lon)."""
-    try:
-        x0 = 155000
-        y0 = 463000
-        phi0 = 52.15517440
-        lam0 = 5.38720621
-        dx = (x - x0) * 10**-5
-        dy = (y - y0) * 10**-5
-        sum_phi = (3235.65389 * dy) + (-32.58297 * dx**2) + (-0.24750 * dy**2) + \
-                  (-0.84978 * dx**2 * dy) + (-0.06550 * dy**3) + \
-                  (1.70776 * dx**2 * dy**2) + (-0.10715 * dy**4) + (0.009 * dy**5)
-        sum_lam = (5260.52916 * dx) + (105.94684 * dx * dy) + (2.45656 * dx * dy**2) + \
-                  (-0.81885 * dx**3) + (0.05594 * dx * dy**3) + \
-                  (-0.05607 * dx**3 * dy) + (0.01199 * dy * dx**4) + (-0.00256 * dx**3 * dy**2)
-        lat = phi0 + sum_phi / 3600
-        lon = lam0 + sum_lam / 3600
-        return lat, lon
-    except:
-        return None, None
-
-def parse_coordinates(geo_str):
-    """Parset coordinaten string naar X, Y, Lat, Lon"""
-    try:
-        clean_str = re.sub(r'[^\d\s.]', '', str(geo_str)).strip()
-        parts = clean_str.split()
-        if len(parts) >= 2:
-            x = float(parts[0])
-            y = float(parts[1])
-            lat, lon = rd_to_wgs84(x, y)
-            return x, y, lat, lon
-    except:
-        pass
-    return None, None, None, None
-
-def determine_waterbody(meetobject_code):
-    for code, name in WATERBODY_MAPPING.items():
-        if code in str(meetobject_code):
-            return name
-    return str(meetobject_code)
 
 KRW_WATERTYPE_BY_WATERLICHAAM = {
     # M21
@@ -106,395 +110,518 @@ KRW_WATERTYPE_BY_WATERLICHAAM = {
 }
 
 
-def get_species_group_mapping():
+# =============================================================================
+# DUCKDB / PARQUET HELPERS
+# =============================================================================
+@st.cache_resource
+def _get_duckdb() -> Optional["duckdb.DuckDBPyConnection"]:
+    """Één DuckDB connectie per Streamlit sessie."""
+    if duckdb is None:
+        return None
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute("PRAGMA threads=4;")
+    except Exception:
+        pass
+    return con
+
+
+def _mtime_or_zero(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
+def _write_parquet_from_pandas(df: pd.DataFrame, path: Path) -> None:
+    """Schrijf Parquet met pyarrow indien beschikbaar (sneller), anders pandas."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if pq is not None and pa is not None:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, path.as_posix(), compression="zstd")
+    else:
+        df.to_parquet(path.as_posix(), index=False)
+
+
+def _read_parquet_to_pandas(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    if pq is not None:
+        return pq.read_table(path.as_posix()).to_pandas()
+    return pd.read_parquet(path.as_posix())
+
+
+def _ensure_measurements_parquet(csv_path: Path) -> Path:
+    """
+    Bouw measurements.parquet als die ontbreekt of als CSV nieuwer is.
+    Gebruikt DuckDB COPY voor performance.
+    """
+    if not csv_path.exists():
+        return MEAS_PARQUET
+
+    if duckdb is None:
+        return MEAS_PARQUET
+
+    need_build = (not MEAS_PARQUET.exists()) or (_mtime_or_zero(csv_path) > _mtime_or_zero(MEAS_PARQUET))
+    if need_build:
+        con = _get_duckdb()
+        if con is None:
+            return MEAS_PARQUET
+
+        # CSV is semicolon-delimited (zoals in je extract)
+        con.execute(f"""
+            COPY (
+                SELECT * FROM read_csv_auto(
+                    '{csv_path.as_posix()}',
+                    delim=';',
+                    SAMPLE_SIZE=-1,
+                    IGNORE_ERRORS=TRUE
+                )
+            )
+            TO '{MEAS_PARQUET.as_posix()}'
+            (FORMAT PARQUET, COMPRESSION ZSTD);
+        """)
+    return MEAS_PARQUET
+
+
+# =============================================================================
+# COORDINATEN
+# =============================================================================
+def rd_to_wgs84(x: float, y: float) -> Tuple[Optional[float], Optional[float]]:
+    """Converteert Rijksdriehoek (RD) coördinaten naar WGS84 (Lat/Lon)."""
+    try:
+        x0 = 155000
+        y0 = 463000
+        phi0 = 52.15517440
+        lam0 = 5.38720621
+        dx = (x - x0) * 10 ** -5
+        dy = (y - y0) * 10 ** -5
+
+        sum_phi = (
+            (3235.65389 * dy)
+            + (-32.58297 * dx ** 2)
+            + (-0.24750 * dy ** 2)
+            + (-0.84978 * dx ** 2 * dy)
+            + (-0.06550 * dy ** 3)
+            + (1.70776 * dx ** 2 * dy ** 2)
+            + (-0.10715 * dy ** 4)
+            + (0.009 * dy ** 5)
+        )
+        sum_lam = (
+            (5260.52916 * dx)
+            + (105.94684 * dx * dy)
+            + (2.45656 * dx * dy ** 2)
+            + (-0.81885 * dx ** 3)
+            + (0.05594 * dx * dy ** 3)
+            + (-0.05607 * dx ** 3 * dy)
+            + (0.01199 * dy * dx ** 4)
+            + (-0.00256 * dx ** 3 * dy ** 2)
+        )
+        lat = phi0 + sum_phi / 3600
+        lon = lam0 + sum_lam / 3600
+        return lat, lon
+    except Exception:
+        return None, None
+
+
+_num_re = re.compile(r"(-?\d+(?:[.,]\d+)?)")
+
+
+def _parse_wkt_point_numbers(wkt: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extraheer de eerste 2 getallen uit WKT string, bijv. 'POINT (144090 482193)'.
+    """
+    if wkt is None:
+        return None, None
+    s = str(wkt).strip()
+    if not s:
+        return None, None
+    nums = _num_re.findall(s)
+    if len(nums) < 2:
+        return None, None
+    try:
+        a = float(nums[0].replace(",", "."))
+        b = float(nums[1].replace(",", "."))
+        return a, b
+    except Exception:
+        return None, None
+
+
+def parse_coordinates(geo_str: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    Backwards compatible wrapper (oude signature).
+    Probeert RD te interpreteren.
+    """
+    a, b = _parse_wkt_point_numbers(geo_str)
+    if a is None or b is None:
+        return None, None, None, None
+    lat, lon = rd_to_wgs84(a, b)
+    return a, b, lat, lon
+
+
+def _parse_coordinates_epsg(epsg: str, wkt: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    CRS-aware parsing:
+      - EPSG:28992: RD meters -> RD->WGS84
+      - EPSG:4258 : lon/lat degrees (ETRS89) -> lat/lon direct
+      - anders: heuristiek (range-check) of None
+    """
+    a, b = _parse_wkt_point_numbers(wkt)
+    if a is None or b is None:
+        return None, None, None, None
+
+    epsg = (epsg or "").strip()
+
+    # EPSG:4258 = lon lat (graden) (in je volledige dataset aanwezig)
+    if epsg == "EPSG:4258":
+        lon = a
+        lat = b
+        return None, None, lat, lon
+
+    # EPSG:28992 = RD x y (meters)
+    if epsg == "EPSG:28992":
+        x = a
+        y = b
+        lat, lon = rd_to_wgs84(x, y)
+        return x, y, lat, lon
+
+    # Fallback: range-based heuristiek
+    # Lijkt op lon/lat (NL)
+    if 3.0 <= a <= 8.2 and 50.0 <= b <= 54.8:
+        return None, None, b, a
+
+    # Lijkt op RD
+    if 0 <= a <= 300000 and 250000 <= b <= 700000:
+        lat, lon = rd_to_wgs84(a, b)
+        return a, b, lat, lon
+
+    return a, b, None, None
+
+
+def _load_coord_cache() -> pd.DataFrame:
+    """
+    Parquet cache met kolommen:
+      epsg, wkt, x_rd, y_rd, lat, lon
+    """
+    if COORD_CACHE_PARQUET.exists():
+        try:
+            df = _read_parquet_to_pandas(COORD_CACHE_PARQUET)
+            # schema hardening
+            for c in ["epsg", "wkt", "x_rd", "y_rd", "lat", "lon"]:
+                if c not in df.columns:
+                    df[c] = np.nan
+            return df[["epsg", "wkt", "x_rd", "y_rd", "lat", "lon"]]
+        except Exception:
+            pass
+    return pd.DataFrame(columns=["epsg", "wkt", "x_rd", "y_rd", "lat", "lon"])
+
+
+def _save_coord_cache(df: pd.DataFrame) -> None:
+    """
+    Sla coord-cache op, dedupe op (epsg,wkt).
+    """
+    if df.empty:
+        return
+    df = df.drop_duplicates(subset=["epsg", "wkt"], keep="last")
+    try:
+        _write_parquet_from_pandas(df, COORD_CACHE_PARQUET)
+    except Exception:
+        pass
+
+
+def _apply_coordinates_cached(df: pd.DataFrame, epsg_col: str = "GeografieDatum", wkt_col: str = "GeografieVorm") -> pd.DataFrame:
+    """
+    PERFORMANCE HOTSPOT FIX:
+    - Parse coördinaten per unieke (GeografieDatum, GeografieVorm)
+    - Cache dit persistent (Parquet) zodat volgende runs vrijwel niets parsen
+    - Cache key is volledige geometriestring + EPSG (dus niet locatie_id)
+    """
+    df = df.copy()
+
+    if epsg_col not in df.columns or wkt_col not in df.columns:
+        df["x_rd"] = np.nan
+        df["y_rd"] = np.nan
+        df["lat"] = np.nan
+        df["lon"] = np.nan
+        return df
+
+    epsg_series = df[epsg_col].fillna("").astype(str)
+    wkt_series = df[wkt_col].fillna("").astype(str)
+
+    # Unieke combinaties
+    uniq = pd.DataFrame({"epsg": epsg_series, "wkt": wkt_series}).drop_duplicates()
+
+    cache = _load_coord_cache()
+    if not cache.empty:
+        cache_idx = cache.set_index(["epsg", "wkt"])
+    else:
+        cache_idx = pd.DataFrame(columns=["x_rd", "y_rd", "lat", "lon"]).set_index(pd.MultiIndex.from_arrays([[], []], names=["epsg", "wkt"]))
+
+    # Welke combos missen?
+    uniq_idx = uniq.set_index(["epsg", "wkt"])
+    missing_idx = uniq_idx.index.difference(cache_idx.index)
+
+    if len(missing_idx) > 0:
+        # Parse alleen missenden
+        missing_pairs = list(missing_idx)
+        parsed = [ _parse_coordinates_epsg(epsg, wkt) for (epsg, wkt) in missing_pairs ]
+        add = pd.DataFrame({
+            "epsg": [p[0] for p in missing_pairs],
+            "wkt":  [p[1] for p in missing_pairs],
+            "x_rd": [t[0] for t in parsed],
+            "y_rd": [t[1] for t in parsed],
+            "lat":  [t[2] for t in parsed],
+            "lon":  [t[3] for t in parsed],
+        })
+        cache = pd.concat([cache, add], ignore_index=True)
+        _save_coord_cache(cache)
+        cache_idx = cache.set_index(["epsg", "wkt"])
+
+    # Map terug (vectorized join)
+    mapped = pd.DataFrame({"epsg": epsg_series, "wkt": wkt_series})
+    mapped = mapped.join(cache_idx, on=["epsg", "wkt"])
+
+    df["x_rd"] = mapped["x_rd"].astype(float)
+    df["y_rd"] = mapped["y_rd"].astype(float)
+    df["lat"] = mapped["lat"].astype(float)
+    df["lon"] = mapped["lon"].astype(float)
+
+    return df
+
+
+# =============================================================================
+# WATERLICHAAM
+# =============================================================================
+def determine_waterbody(meetobject_code: str) -> str:
+    for code, name in WATERBODY_MAPPING.items():
+        if code in str(meetobject_code):
+            return name
+    return str(meetobject_code)
+
+
+# =============================================================================
+# SOORTGROEPEN MAPPING
+# =============================================================================
+def get_species_group_mapping() -> Dict[str, str]:
     """
     Retourneert een dictionary die Latijnse namen mapt naar de gevraagde soortgroepen.
+    (inhoud identiek aan je bestaande mapping)
     """
     return {
-        # --- CHARIDEN (Kranswieren) ---
-        'Chara': 'chariden',
-        'Chara aspera': 'chariden',
-        'Chara canescens': 'chariden',
-        'Chara connivens': 'chariden',
-        'Chara contraria': 'chariden',
-        'Chara globularis': 'chariden',
-        'Chara hispida': 'chariden',
-        'Chara major': 'chariden',
-        'Chara vulgaris': 'chariden',
-        'Chara virgata': 'chariden',
-        'Nitella': 'chariden',
-        'Nitella flexilis': 'chariden',
-        'Nitella hyalina': 'chariden',
-        'Nitella mucronata': 'chariden',
-        'Nitella opaca': 'chariden',
-        'Nitella translucens': 'chariden',
-        'Nitellopsis obtusa': 'chariden',
-        'Tolypella': 'chariden',
-        'Tolypella intricata': 'chariden',
-        'Tolypella prolifera': 'chariden',
-
-        # --- ISOETIDEN (Biesvormigen) ---
-        'Isoetes': 'iseotiden',
-        'Isoetes lacustris': 'iseotiden',
-        'Isoetes echinospora': 'iseotiden',
-        'Littorella uniflora': 'iseotiden',
-        'Lobelia dortmanna': 'iseotiden',
-        'Subularia aquatica': 'iseotiden',
-        'Pilularia globulifera': 'iseotiden',
-
-        # --- PARVOPOTAMIDEN (Smalbladige fonteinkruiden) ---
-        'Potamogeton berchtoldii': 'parvopotamiden',
-        'Potamogeton compressus': 'parvopotamiden',
-        'Potamogeton acutifolius': 'parvopotamiden',
-        'Potamogeton friesii': 'parvopotamiden',
-        'Potamogeton pusillus': 'parvopotamiden',
-        'Potamogeton trichoides': 'parvopotamiden',
-        'Potamogeton obtusifolius': 'parvopotamiden',
-        'Potamogeton pectinatus': 'parvopotamiden',
-        'Stuckenia pectinata': 'parvopotamiden',
-        'Zannichellia palustris': 'parvopotamiden',
-        'Zannichellia palustris ssp. palustris': 'parvopotamiden',
-        'Zannichellia palustris ssp. pedicellata': 'parvopotamiden',
-        'Zannichellia': 'parvopotamiden', 
-        'Ruppia': 'parvopotamiden',
-        'Ruppia cirrhosa': 'parvopotamiden',
-        'Ruppia maritima': 'parvopotamiden',
-        'Najas': 'parvopotamiden',
-        'Najas marina': 'parvopotamiden',
-        'Najas minor': 'parvopotamiden',
-        
-        # --- MAGNOPOTAMIDEN (Breedbladige fonteinkruiden) ---
-        'Potamogeton lucens': 'magnopotamiden',
-        'Potamogeton perfoliatus': 'magnopotamiden',
-        'Potamogeton alpinus': 'magnopotamiden',
-        'Potamogeton praelongus': 'magnopotamiden',
-        'Potamogeton gramineus': 'magnopotamiden',
-        'Potamogeton coloratus': 'magnopotamiden',
-        'Potamogeton nodosus': 'magnopotamiden',
-        'Potamogeton crispus': 'magnopotamiden',
-        'Groenlandia densa': 'magnopotamiden',
-
-        # --- MYRIOPHYLLIDEN (Vederkruiden) ---
-        'Myriophyllum': 'myriophylliden',
-        'Myriophyllum spicatum': 'myriophylliden',
-        'Myriophyllum verticillatum': 'myriophylliden',
-        'Myriophyllum alterniflorum': 'myriophylliden',
-        'Myriophyllum heterophyllum': 'myriophylliden',
-        'Hottonia palustris': 'myriophylliden',
-
+        # --- CHARIDEN ---
+        "Chara": "chariden",
+        "Chara aspera": "chariden",
+        "Chara canescens": "chariden",
+        "Chara connivens": "chariden",
+        "Chara contraria": "chariden",
+        "Chara globularis": "chariden",
+        "Chara hispida": "chariden",
+        "Chara major": "chariden",
+        "Chara vulgaris": "chariden",
+        "Chara virgata": "chariden",
+        "Nitella": "chariden",
+        "Nitella flexilis": "chariden",
+        "Nitella hyalina": "chariden",
+        "Nitella mucronata": "chariden",
+        "Nitella opaca": "chariden",
+        "Nitella translucens": "chariden",
+        "Nitellopsis obtusa": "chariden",
+        "Tolypella": "chariden",
+        "Tolypella intricata": "chariden",
+        "Tolypella prolifera": "chariden",
+        # --- ISOETIDEN ---
+        "Isoetes": "iseotiden",
+        "Isoetes lacustris": "iseotiden",
+        "Isoetes echinospora": "iseotiden",
+        "Littorella uniflora": "iseotiden",
+        "Lobelia dortmanna": "iseotiden",
+        "Subularia aquatica": "iseotiden",
+        "Pilularia globulifera": "iseotiden",
+        # --- PARVOPOTAMIDEN ---
+        "Potamogeton berchtoldii": "parvopotamiden",
+        "Potamogeton compressus": "parvopotamiden",
+        "Potamogeton acutifolius": "parvopotamiden",
+        "Potamogeton friesii": "parvopotamiden",
+        "Potamogeton pusillus": "parvopotamiden",
+        "Potamogeton trichoides": "parvopotamiden",
+        "Potamogeton obtusifolius": "parvopotamiden",
+        "Potamogeton pectinatus": "parvopotamiden",
+        "Stuckenia pectinata": "parvopotamiden",
+        "Zannichellia palustris": "parvopotamiden",
+        "Zannichellia palustris ssp. palustris": "parvopotamiden",
+        "Zannichellia palustris ssp. pedicellata": "parvopotamiden",
+        "Zannichellia": "parvopotamiden",
+        "Ruppia": "parvopotamiden",
+        "Ruppia cirrhosa": "parvopotamiden",
+        "Ruppia maritima": "parvopotamiden",
+        "Najas": "parvopotamiden",
+        "Najas marina": "parvopotamiden",
+        "Najas minor": "parvopotamiden",
+        # --- MAGNOPOTAMIDEN ---
+        "Potamogeton lucens": "magnopotamiden",
+        "Potamogeton perfoliatus": "magnopotamiden",
+        "Potamogeton alpinus": "magnopotamiden",
+        "Potamogeton praelongus": "magnopotamiden",
+        "Potamogeton gramineus": "magnopotamiden",
+        "Potamogeton coloratus": "magnopotamiden",
+        "Potamogeton nodosus": "magnopotamiden",
+        "Potamogeton crispus": "magnopotamiden",
+        "Groenlandia densa": "magnopotamiden",
+        # --- MYRIOPHYLLIDEN ---
+        "Myriophyllum": "myriophylliden",
+        "Myriophyllum spicatum": "myriophylliden",
+        "Myriophyllum verticillatum": "myriophylliden",
+        "Myriophyllum alterniflorum": "myriophylliden",
+        "Myriophyllum heterophyllum": "myriophylliden",
+        "Hottonia palustris": "myriophylliden",
         # --- VALLISNERIIDEN ---
-        'Vallisneria': 'vallisneriiden',
-        'Vallisneria spiralis': 'vallisneriiden',
-
-        # --- ELODEIDEN (Waterpestachtigen) ---
-        'Elodea': 'elodeiden',
-        'Elodea canadensis': 'elodeiden',
-        'Elodea nuttallii': 'elodeiden',
-        'Elodea callitrichoides': 'elodeiden',
-        'Egeria densa': 'elodeiden',
-        'Lagarosiphon major': 'elodeiden',
-        'Hydrilla verticillata': 'elodeiden',
-        'Ceratophyllum': 'elodeiden', 
-        'Ceratophyllum demersum': 'elodeiden',
-        'Ceratophyllum submersum': 'elodeiden',
-
-        # --- STRATIOTIDEN (Krabbenscheer) ---
-        'Stratiotes aloides': 'stratiotiden',
-
+        "Vallisneria": "vallisneriiden",
+        "Vallisneria spiralis": "vallisneriiden",
+        # --- ELODEIDEN ---
+        "Elodea": "elodeiden",
+        "Elodea canadensis": "elodeiden",
+        "Elodea nuttallii": "elodeiden",
+        "Elodea callitrichoides": "elodeiden",
+        "Egeria densa": "elodeiden",
+        "Lagarosiphon major": "elodeiden",
+        "Hydrilla verticillata": "elodeiden",
+        "Ceratophyllum": "elodeiden",
+        "Ceratophyllum demersum": "elodeiden",
+        "Ceratophyllum submersum": "elodeiden",
+        # --- STRATIOTIDEN ---
+        "Stratiotes aloides": "stratiotiden",
         # --- PEPLIDEN ---
-        'Peplis portula': 'pepliden',
-        'Lythrum portula': 'pepliden',
-
-        # --- BATRACHIIDEN (Waterranonkels) ---
-        'Ranunculus': 'batrachiiden',
-        'Ranunculus aquatilis': 'batrachiiden',
-        'Ranunculus circinatus': 'batrachiiden',
-        'Ranunculus fluitans': 'batrachiiden',
-        'Ranunculus peltatus': 'batrachiiden',
-        'Ranunculus penicillatus': 'batrachiiden',
-        'Ranunculus trichophyllus': 'batrachiiden',
-        'Ranunculus baudotii': 'batrachiiden',
-        'Callitriche': 'batrachiiden',
-        'Callitriche stagnalis': 'batrachiiden',
-        'Callitriche platycarpa': 'batrachiiden',
-        'Callitriche obtusangula': 'batrachiiden',
-        'Callitriche cophocarpa': 'batrachiiden',
-        'Callitriche hamulata': 'batrachiiden',
-        'Callitriche truncata': 'batrachiiden',
-
-        # --- NYMPHAEIDEN (Drijfbladplanten) ---
-        'Nuphar lutea': 'nymphaeiden',
-        'Nymphaea alba': 'nymphaeiden',
-        'Nymphaea candida': 'nymphaeiden',
-        'Nymphoides peltata': 'nymphaeiden',
-        'Potamogeton natans': 'nymphaeiden',
-        'Persicaria amphibia': 'nymphaeiden',
-        'Sparganium emersum': 'nymphaeiden',
-        'Sagittaria sagittifolia': 'nymphaeiden',
-
-        # --- HAPTOFYTEN (Vastzittende wieren/mossen) ---
-        'Fontinalis antipyretica': 'haptofyten',
-        'Enteromorpha': 'haptofyten',
-        'Enteromorpha intestinalis': 'haptofyten',
-        'Ulva intestinalis': 'haptofyten',
-        'Hydrodictyon reticulatum': 'haptofyten',
-        'Cladophora': 'haptofyten',
-        'Vaucheria': 'haptofyten',
-        'Chara': 'chariden',
-        'Amblystegium varium': 'haptofyten',
-        'Amblystegium fluviatile': 'haptofyten',
-        'Leptodictyum riparium': 'haptofyten'
+        "Peplis portula": "pepliden",
+        "Lythrum portula": "pepliden",
+        # --- BATRACHIIDEN ---
+        "Ranunculus": "batrachiiden",
+        "Ranunculus aquatilis": "batrachiiden",
+        "Ranunculus circinatus": "batrachiiden",
+        "Ranunculus fluitans": "batrachiiden",
+        "Ranunculus peltatus": "batrachiiden",
+        "Ranunculus penicillatus": "batrachiiden",
+        "Ranunculus trichophyllus": "batrachiiden",
+        "Ranunculus baudotii": "batrachiiden",
+        "Callitriche": "batrachiiden",
+        "Callitriche stagnalis": "batrachiiden",
+        "Callitriche platycarpa": "batrachiiden",
+        "Callitriche obtusangula": "batrachiiden",
+        "Callitriche cophocarpa": "batrachiiden",
+        "Callitriche hamulata": "batrachiiden",
+        "Callitriche truncata": "batrachiiden",
+        # --- NYMPHAEIDEN ---
+        "Nuphar lutea": "nymphaeiden",
+        "Nymphaea alba": "nymphaeiden",
+        "Nymphaea candida": "nymphaeiden",
+        "Nymphoides peltata": "nymphaeiden",
+        "Potamogeton natans": "nymphaeiden",
+        "Persicaria amphibia": "nymphaeiden",
+        "Sparganium emersum": "nymphaeiden",
+        "Sagittaria sagittifolia": "nymphaeiden",
+        # --- HAPTOFYTEN ---
+        "Fontinalis antipyretica": "haptofyten",
+        "Enteromorpha": "haptofyten",
+        "Enteromorpha intestinalis": "haptofyten",
+        "Ulva intestinalis": "haptofyten",
+        "Hydrodictyon reticulatum": "haptofyten",
+        "Cladophora": "haptofyten",
+        "Vaucheria": "haptofyten",
+        "Amblystegium varium": "haptofyten",
+        "Amblystegium fluviatile": "haptofyten",
+        "Leptodictyum riparium": "haptofyten",
     }
 
-def determine_group(row, mapping_dict):
-    """
-    Hulpfunctie om de groep te bepalen.
-    CHECK: Kijkt naar 'soort', 'Parameter' en 'Grootheid'.
-    """
-    # Eerst checken op kenmerkende soorten o.b.v. Grootheid AANWZHD
-    grootheid = row.get('Grootheid', '')
-    if grootheid == 'AANWZHD':
-        return 'Kenmerkende soort (N2000)'
 
-    # Haal de waarde op uit 'soort' (nieuwe naam) of 'Parameter' (fallback)
-    param_val = row.get('soort', row.get('Parameter', ''))
-    param = str(param_val).strip()
-    
-    # 1. Directe match
-    if param in mapping_dict:
-        return mapping_dict[param]
-    
-    # 2. Check op Genus (eerste woord)
-    genus = param.split(' ')[0]
-    # Uitzondering voor Potamogeton (is opgesplitst)
-    if genus == 'Potamogeton':
-        pass 
-    elif genus in mapping_dict:
-        return mapping_dict[genus]
-    
-    # 3. Check bestaande mapping (GROWTH_FORM_MAPPING)
-    if 'GROWTH_FORM_MAPPING' in globals() and param in globals()['GROWTH_FORM_MAPPING']:
-        original_group = globals()['GROWTH_FORM_MAPPING'][param]
-        if 'draadalg' in str(original_group).lower():
-            return 'haptofyten'
-        if 'kranswier' in str(original_group).lower():
-            return 'chariden'
-            
-    return 'Overig / Individueel'
-
-def add_species_group_columns(df):
+def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Voegt 'soortgroep' toe aan de dataset, maar EXCLUSIEF de algemene groeivorm-codes.
+    Voegt 'soortgroep' toe aan de dataset, exclusief de algemene groeivorm-codes.
+    PERFORMANCE: vectorized i.p.v. df.apply(axis=1).
     """
     mapping = get_species_group_mapping()
     df = df.copy()
-    
-    # --- STAP 1: FILTEREN ---
-    # We sluiten rijen uit die algemene verzamelgroepen zijn.
-    # We filteren op de kolom 'soort' (wat voorheen 'Parameter' was)
-    df = df[~df['soort'].isin(EXCLUDED_SPECIES_CODES)]
-    
-    # Extra check op de kolom 'type' als back-up
-    if 'type' in df.columns:
-        df = df[df['type'] != 'Groep']
 
-    # --- STAP 2: MAPPING TOEPASSEN ---
-    # Nu bepalen we de soortgroep voor de overgebleven echte soorten
-    df['soortgroep'] = df.apply(lambda row: determine_group(row, mapping), axis=1)
-    
-    # --- STAP 3: PERCENTAGES ---
-    # Als Grootheid AANWZHD is, is de waarde vaak 1.0 (aanwezig) of 0.0 (afwezig).
-    # We willen dit wel parsen, maar bewust zijn dat dit geen percentage bedekking is.
-    target_col = 'bedekking_pct'
+    if "soort" not in df.columns:
+        return df
+
+    # Filter verzamelcodes en type Groep
+    df = df[~df["soort"].isin(EXCLUDED_SPECIES_CODES)]
+    if "type" in df.columns:
+        df = df[df["type"] != "Groep"]
+
+    if df.empty:
+        df["soortgroep"] = pd.Series(dtype="object")
+        df["bedekkingsgraad_proc"] = pd.Series(dtype="float")
+        return df
+
+    soort = df["soort"].fillna("").astype(str).str.strip()
+    genus = soort.str.split().str[0].fillna("")
+
+    soortgroep = pd.Series("Overig / Individueel", index=df.index, dtype="object")
+
+    # Kenmerkende soorten o.b.v. Grootheid
+    if "Grootheid" in df.columns:
+        mask_aanw = df["Grootheid"].astype(str) == "AANWZHD"
+        soortgroep.loc[mask_aanw] = "Kenmerkende soort (N2000)"
+    else:
+        mask_aanw = pd.Series(False, index=df.index)
+
+    # Directe mapping
+    direct = soort.map(mapping)
+    mask_direct = direct.notna() & (~mask_aanw)
+    soortgroep.loc[mask_direct] = direct.loc[mask_direct].astype(str)
+
+    # Genus mapping (behalve Potamogeton)
+    mask_need = (soortgroep == "Overig / Individueel") & (~mask_aanw)
+    genus_map = genus.map(mapping)
+    mask_genus = mask_need & (genus != "Potamogeton") & genus_map.notna()
+    soortgroep.loc[mask_genus] = genus_map.loc[mask_genus].astype(str)
+
+    df["soortgroep"] = soortgroep
+
+    # Bedekkingsgraad numeriek
+    target_col = "bedekking_pct"
     if target_col not in df.columns:
-        target_col = 'waarde_bedekking' if 'waarde_bedekking' in df.columns else 'WaardeGemeten'
-    
-    def parse_percentage(val):
-        if pd.isna(val): return 0.0
-        try:
-            return float(str(val).replace(',', '.').replace('<', '').replace('>', '').strip())
-        except: return 0.0
+        target_col = "waarde_bedekking" if "waarde_bedekking" in df.columns else ("WaardeGemeten" if "WaardeGemeten" in df.columns else None)
 
-    df['bedekkingsgraad_proc'] = df[target_col].apply(parse_percentage)
-    
+    if target_col is None:
+        df["bedekkingsgraad_proc"] = 0.0
+    else:
+        s = df[target_col].fillna(0).astype(str).str.replace(",", ".", regex=False)
+        s = s.str.replace("<", "", regex=False).str.replace(">", "", regex=False).str.strip()
+        df["bedekkingsgraad_proc"] = pd.to_numeric(s, errors="coerce").fillna(0.0).astype(float)
+
     return df
 
-def get_sorted_species_list(df):
-    """
-    Genereert een gesorteerde lijst van individuele soorten (uniek),
-    waarbij verzamelgroepen (FLAB, etc.) worden uitgesloten.
-    """
-    # Filter op rijen die GEEN groep zijn (dus type='Soort') of 
-    # expliciet in de exclude lijst staan
-    mask_not_excluded = ~df['soort'].isin(EXCLUDED_SPECIES_CODES)
-    mask_type_sort = df['type'] != 'Groep' if 'type' in df.columns else True
-    
-    species_df = df[mask_not_excluded & mask_type_sort]
-    
-    # Unieke waarden ophalen en sorteren
-    unique_species = sorted(species_df['soort'].dropna().unique())
-    return unique_species
 
+def get_sorted_species_list(df: pd.DataFrame) -> list:
+    """Gesorteerde lijst met individuele soorten (excl. verzamelcodes)."""
+    if "soort" not in df.columns:
+        return []
+    mask_not_excluded = ~df["soort"].isin(EXCLUDED_SPECIES_CODES)
+    mask_type = (df["type"] != "Groep") if ("type" in df.columns) else True
+    species_df = df[mask_not_excluded & mask_type]
+    return sorted(species_df["soort"].dropna().unique())
+
+
+# =============================================================================
+# LOOKUP: CSV -> genormaliseerde DF (+ Parquet cache)
+# =============================================================================
 @st.cache_data
-def load_data():
+def load_species_lookup() -> pd.DataFrame:
     """
-    Laadt data, splitst WATPTN van soorten, en merged alles terug.
-    Inclusief verwerking van Grootheid 'AANWZHD' voor N2000 soorten.
+    Laad koppeltabel met NL naam, trofie (Watertype) en KRW-scores (M14/M21).
+    Bouwt (en gebruikt) LOOKUP_PARQUET cache.
     """
-    try:
-        df_raw = pd.read_csv(FILE_PATH, sep=None, engine='python', encoding='utf-8-sig')
-    except Exception as e:
-        st.error(f"Fout bij inlezen '{FILE_PATH}': {e}")
-        return pd.DataFrame()
+    csv_path = Path(SPECIES_LOOKUP_PATH)
 
-    df_raw.columns = df_raw.columns.str.strip()
-    
-    if 'MetingDatumTijd' in df_raw.columns:
-        df_raw['MetingDatumTijd'] = pd.to_datetime(df_raw['MetingDatumTijd'], dayfirst=True, errors='coerce')
-        df_raw['datum'] = df_raw['MetingDatumTijd'].dt.floor('D')
-        df_raw['jaar'] = df_raw['datum'].dt.year
-    else:
-        st.error("Kolom 'MetingDatumTijd' mist.")
-        return pd.DataFrame()
+    if LOOKUP_PARQUET.exists() and _mtime_or_zero(LOOKUP_PARQUET) >= _mtime_or_zero(csv_path):
+        df_cached = _read_parquet_to_pandas(LOOKUP_PARQUET)
+        want = ["soort_norm", "NL naam", "Watertype", "M14", "M21"]
+        for c in want:
+            if c not in df_cached.columns:
+                df_cached[c] = np.nan
+        return df_cached[want]
 
-    if 'Projecten' in df_raw.columns:
-        df_raw['Project'] = df_raw['Projecten'].map(PROJECT_MAPPING).fillna(df_raw['Projecten'])
-    
-    if 'MeetObject' in df_raw.columns:
-        df_raw['Waterlichaam'] = df_raw['MeetObject'].apply(determine_waterbody)
-
-    if 'GeografieVorm' in df_raw.columns:
-        coords = df_raw['GeografieVorm'].apply(parse_coordinates)
-        df_raw['x_rd'] = [c[0] for c in coords]
-        df_raw['y_rd'] = [c[1] for c in coords]
-        df_raw['lat'] = [c[2] for c in coords]
-        df_raw['lon'] = [c[3] for c in coords]
-
-    # --- ABIOTIEK (Diepte, Zicht) ---
-    df_abiotic = df_raw[df_raw['Grootheid'].isin(['DIEPTE', 'ZICHT'])].copy()
-    if not df_abiotic.empty:
-        df_env = df_abiotic.pivot_table(
-            index='CollectieReferentie', 
-            columns='Grootheid', 
-            values='WaardeGemeten', 
-            aggfunc='mean'
-        ).reset_index()
-    else:
-        df_env = pd.DataFrame(columns=['CollectieReferentie'])
-
-    if 'DIEPTE' in df_env.columns:
-        df_env['diepte_m'] = df_env['DIEPTE'] / 100 
-    else:
-        df_env['diepte_m'] = np.nan
-
-    if 'ZICHT' in df_env.columns:
-        df_env['doorzicht_m'] = df_env['ZICHT'] / 10 
-    else:
-        df_env['doorzicht_m'] = np.nan
-
-    # --- TOTALE BEDEKKING (WATPTN) ---
-    df_total = df_raw[df_raw['Parameter'] == 'WATPTN'].copy()
-    df_total = df_total[['CollectieReferentie', 'WaardeGemeten']].rename(
-        columns={'WaardeGemeten': 'totaal_bedekking_locatie'}
-    )
-    df_total = df_total.groupby('CollectieReferentie', as_index=False).mean()
-
-    # --- INDIVIDUELE SOORTEN EN KENMERKENDE SOORTEN ---
-    # Hier filteren we op BEDKG (Bedekking) ÉN AANWZHD (Aanwezigheid)
-    df_bedkg = df_raw[
-        (df_raw['Grootheid'].isin(['BEDKG', 'AANWZHD'])) & 
-        (df_raw['Parameter'] != 'WATPTN')
-    ].copy()
-
-    def classify_row(row):
-        param = row['Parameter']
-        grootheid = row['Grootheid']
-        
-        # Mapping voor Kenmerkende Soorten (N2000)
-        if grootheid == 'AANWZHD':
-            return 'Kenmerkende soort (N2000)', 'Soort'
-            
-        # Mapping voor Groeivormen
-        if param in GROWTH_FORM_MAPPING:
-            return GROWTH_FORM_MAPPING[param], 'Groep'
-        else:
-            return 'Individuele soort', 'Soort'
-
-    classificatie = df_bedkg.apply(classify_row, axis=1)
-    df_bedkg['groeivorm'] = [x[0] for x in classificatie]
-    df_bedkg['type'] = [x[1] for x in classificatie]
-
-    # Mergen van alle data
-    df_merged = pd.merge(df_bedkg, df_env, on='CollectieReferentie', how='left')
-    df_merged = pd.merge(df_merged, df_total, on='CollectieReferentie', how='left')   
-    
-    final_df = df_merged.rename(columns={
-        'MeetObject': 'locatie_id',
-        'Parameter': 'soort',
-        'WaardeGemeten': 'waarde_bedekking', # Tijdelijke rename, wordt zo gefixed
-        'EenheidGemeten': 'eenheid'
-    })
-    
-    # Consistent maken van bedekkingskolom
-    if 'waarde_bedekking' in final_df.columns:
-        final_df['bedekking_pct'] = final_df['waarde_bedekking']
-
-    cols_to_keep = [
-        'datum', 'jaar', 'locatie_id', 'Waterlichaam', 'Project', 'CollectieReferentie',
-        'soort', 'bedekking_pct', 'waarde_bedekking', 'totaal_bedekking_locatie', 
-        'diepte_m', 'doorzicht_m', 'lat', 'lon', 'x_rd', 'y_rd',
-        'groeivorm', 'type', 'Grootheid', 'soort_triviaal', 'trofisch_niveau', 'krw_watertype',
-         'krw_score', 'krw_class', 'soort_display'
-    ]
-    
-    # --- Verrijking: NL naam, trofisch niveau, KRW score (M14/M21) ---
-    lookup = load_species_lookup()
-
-    final_df["soort_norm"] = (
-        final_df["soort"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .str.replace(r"\s+", " ", regex=True)
-    )
-
-    final_df = final_df.merge(lookup, on="soort_norm", how="left")
-
-    final_df = final_df.rename(columns={
-        "NL naam": "soort_triviaal",
-        "Watertype": "trofisch_niveau"
-    })
-
-    final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
-
-    final_df["krw_score"] = np.nan
-    mask_m14 = final_df["krw_watertype"] == "M14"
-    mask_m21 = final_df["krw_watertype"] == "M21"
-    final_df.loc[mask_m14, "krw_score"] = final_df.loc[mask_m14, "M14"]
-    final_df.loc[mask_m21, "krw_score"] = final_df.loc[mask_m21, "M21"]
-
-    final_df["krw_class"] = pd.cut(
-        final_df["krw_score"],
-        bins=[0, 2, 4, 5],
-        labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
-        include_lowest=True
-    )
-
-    final_df["soort_display"] = np.where(
-        final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
-        final_df["soort_triviaal"] + " (" + final_df["soort"] + ")",
-        final_df["soort"]
-    )
-
-    for col in cols_to_keep:
-        if col not in final_df.columns:
-            final_df[col] = np.nan
-
-    return final_df[cols_to_keep]
-
-@st.cache_data
-def load_species_lookup():
-    """Laad koppeltabel met NL naam, trofie (Watertype) en KRW-scores (M14/M21). Robuust voor delimiters/ontbrekende kolommen."""
     try:
         df_lu = pd.read_csv(SPECIES_LOOKUP_PATH, sep=None, engine="python", encoding="utf-8-sig")
     except Exception as e:
@@ -503,7 +630,6 @@ def load_species_lookup():
 
     df_lu.columns = df_lu.columns.str.strip()
 
-    # Optioneel: vang alternatieve kolomnamen af
     rename_map = {
         "NL_naam": "NL naam",
         "NLnaam": "NL naam",
@@ -515,22 +641,20 @@ def load_species_lookup():
     }
     df_lu = df_lu.rename(columns={k: v for k, v in rename_map.items() if k in df_lu.columns})
 
-    # Minimaal required
     if "Wetenschappelijke naam" not in df_lu.columns:
         st.warning("⚠️ Koppeltabel mist kolom 'Wetenschappelijke naam'. Verrijking wordt overgeslagen.")
         return pd.DataFrame(columns=["soort_norm", "NL naam", "Watertype", "M14", "M21"])
 
-    # Optioneel aanwezige kolommen: voeg toe als ze ontbreken (blijven NaN)
     if "NL naam" not in df_lu.columns:
         df_lu["NL naam"] = np.nan
     if "Watertype" not in df_lu.columns:
         df_lu["Watertype"] = np.nan
+
     for c in ["M14", "M21"]:
         if c not in df_lu.columns:
             df_lu[c] = np.nan
         df_lu[c] = pd.to_numeric(df_lu[c], errors="coerce")
 
-    # Normaliseer sleutel
     df_lu["soort_norm"] = (
         df_lu["Wetenschappelijke naam"]
         .fillna("")
@@ -539,163 +663,525 @@ def load_species_lookup():
         .str.replace(r"\s+", " ", regex=True)
     )
 
-    # Voorkom row-explosion door dubbelen
     sort_cols = [c for c in ["NL naam", "Watertype", "M14", "M21"] if c in df_lu.columns]
     if sort_cols:
         df_lu = df_lu.sort_values(by=sort_cols, ascending=[False] * len(sort_cols))
 
     df_lu = df_lu.drop_duplicates(subset=["soort_norm"], keep="first")
+    out = df_lu[["soort_norm", "NL naam", "Watertype", "M14", "M21"]].copy()
 
-    return df_lu[["soort_norm", "NL naam", "Watertype", "M14", "M21"]]
+    try:
+        _write_parquet_from_pandas(out, LOOKUP_PARQUET)
+    except Exception:
+        pass
 
-# --- PLOT FUNCTIES ---
+    return out
+
+
+# =============================================================================
+# CORE LOAD_DATA (DuckDB + Parquet) met fallback
+# =============================================================================
+def _file_signature() -> Tuple[str, float, float, str]:
+    """Cache key: pipeline versie + mtimes."""
+    csv_path = Path(FILE_PATH)
+    lookup_path = Path(SPECIES_LOOKUP_PATH)
+    return (
+        str(csv_path.resolve()) if csv_path.exists() else str(csv_path),
+        _mtime_or_zero(csv_path),
+        _mtime_or_zero(lookup_path),
+        PIPELINE_VERSION,
+    )
+
+
+@st.cache_data
+def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
+    """
+    Interne cached loader. 'sig' zorgt voor invalidatie wanneer CSV/lookup verandert
+    of wanneer PIPELINE_VERSION wordt verhoogd.
+    """
+    csv_path = Path(FILE_PATH)
+    lookup_csv = Path(SPECIES_LOOKUP_PATH)
+
+    # 0) Als FINAL_PARQUET up-to-date is: direct lezen
+    if FINAL_PARQUET.exists():
+        ok = (_mtime_or_zero(FINAL_PARQUET) >= _mtime_or_zero(csv_path)) and (_mtime_or_zero(FINAL_PARQUET) >= _mtime_or_zero(lookup_csv))
+        if ok:
+            df_final = _read_parquet_to_pandas(FINAL_PARQUET)
+            if not df_final.empty:
+                return df_final
+
+    # 1) DuckDB pad
+    con = _get_duckdb()
+    if con is not None and csv_path.exists():
+        _ensure_measurements_parquet(csv_path)
+
+        if MEAS_PARQUET.exists():
+            # SQL: abiotiek + total WATPTN + BEDKG/AANWZHD selectie
+            gf_keys = list(GROWTH_FORM_MAPPING.keys())
+            gf_case = " ".join([f"WHEN Parameter='{k}' THEN '{GROWTH_FORM_MAPPING[k]}'" for k in gf_keys])
+            gf_in = ",".join([f"'{k}'" for k in gf_keys])
+
+            sql = f"""
+            WITH base AS (
+                SELECT
+                    *,
+                    COALESCE(
+                        TRY_CAST(MetingDatumTijd AS TIMESTAMP),
+                        TRY_STRPTIME(MetingDatumTijd, '%d-%m-%Y %H:%M:%S'),
+                        TRY_STRPTIME(MetingDatumTijd, '%d-%m-%Y'),
+                        TRY_STRPTIME(MetingDatumTijd, '%Y-%m-%d %H:%M:%S'),
+                        TRY_STRPTIME(MetingDatumTijd, '%Y-%m-%d')
+                    ) AS meting_ts
+                FROM read_parquet('{MEAS_PARQUET.as_posix()}')
+            ),
+            env AS (
+                SELECT
+                    CollectieReferentie,
+                    AVG(CASE WHEN Grootheid='DIEPTE' THEN CAST(WaardeGemeten AS DOUBLE) END) AS DIEPTE,
+                    AVG(CASE WHEN Grootheid='ZICHT' THEN CAST(WaardeGemeten AS DOUBLE) END)  AS ZICHT
+                FROM base
+                WHERE Grootheid IN ('DIEPTE','ZICHT')
+                GROUP BY 1
+            ),
+            total AS (
+                SELECT
+                    CollectieReferentie,
+                    AVG(CAST(WaardeGemeten AS DOUBLE)) AS totaal_bedekking_locatie
+                FROM base
+                WHERE Parameter='WATPTN'
+                GROUP BY 1
+            ),
+            bedkg AS (
+                SELECT
+                    meting_ts,
+                    DATE_TRUNC('day', meting_ts) AS datum,
+                    EXTRACT(year FROM meting_ts) AS jaar,
+                    MeetObject,
+                    Projecten,
+                    GeografieDatum,
+                    GeografieVorm,
+                    CollectieReferentie,
+                    Parameter,
+                    Grootheid,
+                    WaardeGemeten,
+                    EenheidGemeten,
+                    CASE
+                        WHEN Grootheid='AANWZHD' THEN 'Kenmerkende soort (N2000)'
+                        {gf_case}
+                        ELSE 'Individuele soort'
+                    END AS groeivorm,
+                    CASE
+                        WHEN Grootheid='AANWZHD' THEN 'Soort'
+                        WHEN Parameter IN ({gf_in}) THEN 'Groep'
+                        ELSE 'Soort'
+                    END AS type
+                FROM base
+                WHERE Grootheid IN ('BEDKG','AANWZHD') AND Parameter <> 'WATPTN'
+            )
+            SELECT
+                b.datum,
+                b.jaar,
+                b.MeetObject,
+                b.Projecten,
+                b.GeografieDatum,
+                b.GeografieVorm,
+                b.CollectieReferentie,
+                b.Parameter,
+                b.Grootheid,
+                b.WaardeGemeten,
+                b.EenheidGemeten,
+                b.groeivorm,
+                b.type,
+                e.DIEPTE,
+                e.ZICHT,
+                t.totaal_bedekking_locatie
+            FROM bedkg b
+            LEFT JOIN env e USING (CollectieReferentie)
+            LEFT JOIN total t USING (CollectieReferentie)
+            """
+
+            try:
+                df_merged = con.execute(sql).fetch_df()
+            except Exception as e:
+                df_merged = pd.DataFrame()
+                st.warning(f"⚠️ DuckDB pad faalde, val terug op pandas: {e}")
+
+            if not df_merged.empty:
+                # Project
+                df_merged["Project"] = df_merged["Projecten"].map(PROJECT_MAPPING).fillna(df_merged["Projecten"])
+
+                # Waterlichaam
+                df_merged["Waterlichaam"] = df_merged["MeetObject"].apply(determine_waterbody)
+
+                # Abiotic conversions
+                df_merged["diepte_m"] = pd.to_numeric(df_merged.get("DIEPTE"), errors="coerce") / 100.0
+                df_merged["doorzicht_m"] = pd.to_numeric(df_merged.get("ZICHT"), errors="coerce") / 10.0
+
+                # Rename naar final schema
+                final_df = df_merged.rename(
+                    columns={
+                        "MeetObject": "locatie_id",
+                        "Parameter": "soort",
+                        "WaardeGemeten": "waarde_bedekking",
+                        "EenheidGemeten": "eenheid",
+                    }
+                )
+
+                # bedekking_pct consistent
+                final_df["bedekking_pct"] = final_df["waarde_bedekking"]
+
+                # Coördinaten: parse per unieke (GeografieDatum, GeografieVorm) en cache persistent
+                final_df = _apply_coordinates_cached(final_df, epsg_col="GeografieDatum", wkt_col="GeografieVorm")
+
+                # Verrijking lookup
+                lookup = load_species_lookup()
+                final_df["soort_norm"] = (
+                    final_df["soort"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .str.replace(r"\s+", " ", regex=True)
+                )
+                final_df = final_df.merge(lookup, on="soort_norm", how="left")
+                final_df = final_df.rename(columns={"NL naam": "soort_triviaal", "Watertype": "trofisch_niveau"})
+
+                # KRW score/class
+                final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
+                final_df["krw_score"] = np.nan
+                mask_m14 = final_df["krw_watertype"] == "M14"
+                mask_m21 = final_df["krw_watertype"] == "M21"
+                if "M14" in final_df.columns:
+                    final_df.loc[mask_m14, "krw_score"] = final_df.loc[mask_m14, "M14"]
+                if "M21" in final_df.columns:
+                    final_df.loc[mask_m21, "krw_score"] = final_df.loc[mask_m21, "M21"]
+
+                final_df["krw_class"] = pd.cut(
+                    final_df["krw_score"],
+                    bins=[0, 2, 4, 5],
+                    labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+                    include_lowest=True,
+                )
+
+                final_df["soort_display"] = np.where(
+                    final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
+                    final_df["soort_triviaal"] + " (" + final_df["soort"] + ")",
+                    final_df["soort"],
+                )
+
+                cols_to_keep = [
+                    "datum", "jaar", "locatie_id", "Waterlichaam", "Project", "CollectieReferentie",
+                    "soort", "bedekking_pct", "waarde_bedekking", "totaal_bedekking_locatie",
+                    "diepte_m", "doorzicht_m", "lat", "lon", "x_rd", "y_rd",
+                    "groeivorm", "type", "Grootheid", "soort_triviaal", "trofisch_niveau",
+                    "krw_watertype", "krw_score", "krw_class", "soort_display"
+                ]
+
+                for col in cols_to_keep:
+                    if col not in final_df.columns:
+                        final_df[col] = np.nan
+
+                final_df = final_df[cols_to_keep]
+
+                try:
+                    _write_parquet_from_pandas(final_df, FINAL_PARQUET)
+                except Exception:
+                    pass
+
+                return final_df
+
+    # 2) Fallback: pandas pad (origineel gedrag, semicolon eerst)
+    try:
+        df_raw = pd.read_csv(FILE_PATH, sep=";", engine="python", encoding="utf-8-sig")
+    except Exception:
+        df_raw = pd.read_csv(FILE_PATH, sep=None, engine="python", encoding="utf-8-sig")
+
+    df_raw.columns = df_raw.columns.str.strip()
+
+    if "MetingDatumTijd" in df_raw.columns:
+        df_raw["MetingDatumTijd"] = pd.to_datetime(df_raw["MetingDatumTijd"], dayfirst=True, errors="coerce")
+        df_raw["datum"] = df_raw["MetingDatumTijd"].dt.floor("D")
+        df_raw["jaar"] = df_raw["datum"].dt.year
+    else:
+        st.error("Kolom 'MetingDatumTijd' mist.")
+        return pd.DataFrame()
+
+    df_raw["Project"] = df_raw["Projecten"].map(PROJECT_MAPPING).fillna(df_raw["Projecten"])
+    df_raw["Waterlichaam"] = df_raw["MeetObject"].apply(determine_waterbody)
+
+    # ABIOTIEK
+    df_abiotic = df_raw[df_raw["Grootheid"].isin(["DIEPTE", "ZICHT"])].copy()
+    if not df_abiotic.empty:
+        df_env = df_abiotic.pivot_table(
+            index="CollectieReferentie",
+            columns="Grootheid",
+            values="WaardeGemeten",
+            aggfunc="mean",
+        ).reset_index()
+    else:
+        df_env = pd.DataFrame(columns=["CollectieReferentie"])
+
+    df_env["diepte_m"] = pd.to_numeric(df_env.get("DIEPTE"), errors="coerce") / 100.0
+    df_env["doorzicht_m"] = pd.to_numeric(df_env.get("ZICHT"), errors="coerce") / 10.0
+
+    # WATPTN
+    df_total = df_raw[df_raw["Parameter"] == "WATPTN"].copy()
+    df_total = df_total[["CollectieReferentie", "WaardeGemeten"]].rename(columns={"WaardeGemeten": "totaal_bedekking_locatie"})
+    df_total["totaal_bedekking_locatie"] = pd.to_numeric(df_total["totaal_bedekking_locatie"], errors="coerce")
+    df_total = df_total.groupby("CollectieReferentie", as_index=False).mean()
+
+    # BEDKG/AANWZHD
+    df_bedkg = df_raw[(df_raw["Grootheid"].isin(["BEDKG", "AANWZHD"])) & (df_raw["Parameter"] != "WATPTN")].copy()
+
+    def classify_row(row):
+        param = row["Parameter"]
+        grootheid = row["Grootheid"]
+        if grootheid == "AANWZHD":
+            return "Kenmerkende soort (N2000)", "Soort"
+        if param in GROWTH_FORM_MAPPING:
+            return GROWTH_FORM_MAPPING[param], "Groep"
+        return "Individuele soort", "Soort"
+
+    classificatie = df_bedkg.apply(classify_row, axis=1)
+    df_bedkg["groeivorm"] = [x[0] for x in classificatie]
+    df_bedkg["type"] = [x[1] for x in classificatie]
+
+    df_merged = pd.merge(df_bedkg, df_env[["CollectieReferentie", "diepte_m", "doorzicht_m"]], on="CollectieReferentie", how="left")
+    df_merged = pd.merge(df_merged, df_total, on="CollectieReferentie", how="left")
+
+    final_df = df_merged.rename(
+        columns={
+            "MeetObject": "locatie_id",
+            "Parameter": "soort",
+            "WaardeGemeten": "waarde_bedekking",
+            "EenheidGemeten": "eenheid",
+        }
+    )
+    final_df["bedekking_pct"] = final_df["waarde_bedekking"]
+
+    # Coördinaten via cache (EPSG + WKT)
+    final_df = _apply_coordinates_cached(final_df, epsg_col="GeografieDatum", wkt_col="GeografieVorm")
+
+    lookup = load_species_lookup()
+    final_df["soort_norm"] = (
+        final_df["soort"].fillna("").astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+    )
+    final_df = final_df.merge(lookup, on="soort_norm", how="left")
+    final_df = final_df.rename(columns={"NL naam": "soort_triviaal", "Watertype": "trofisch_niveau"})
+
+    final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
+    final_df["krw_score"] = np.nan
+    mask_m14 = final_df["krw_watertype"] == "M14"
+    mask_m21 = final_df["krw_watertype"] == "M21"
+    final_df.loc[mask_m14, "krw_score"] = final_df.loc[mask_m14, "M14"]
+    final_df.loc[mask_m21, "krw_score"] = final_df.loc[mask_m21, "M21"]
+    final_df["krw_class"] = pd.cut(
+        final_df["krw_score"],
+        bins=[0, 2, 4, 5],
+        labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+        include_lowest=True,
+    )
+    final_df["soort_display"] = np.where(
+        final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
+        final_df["soort_triviaal"] + " (" + final_df["soort"] + ")",
+        final_df["soort"],
+    )
+
+    cols_to_keep = [
+        "datum", "jaar", "locatie_id", "Waterlichaam", "Project", "CollectieReferentie",
+        "soort", "bedekking_pct", "waarde_bedekking", "totaal_bedekking_locatie",
+        "diepte_m", "doorzicht_m", "lat", "lon", "x_rd", "y_rd",
+        "groeivorm", "type", "Grootheid", "soort_triviaal", "trofisch_niveau",
+        "krw_watertype", "krw_score", "krw_class", "soort_display"
+    ]
+    for col in cols_to_keep:
+        if col not in final_df.columns:
+            final_df[col] = np.nan
+
+    final_df = final_df[cols_to_keep]
+
+    try:
+        _write_parquet_from_pandas(final_df, FINAL_PARQUET)
+    except Exception:
+        pass
+
+    return final_df
+
+
+@st.cache_data
+def load_data() -> pd.DataFrame:
+    """Public API: laadt verrijkte dataset (DuckDB+Parquet waar mogelijk)."""
+    sig = _file_signature()
+    return _load_data_cached(sig)
+
+
+# =============================================================================
+# PLOT FUNCTIES
+# =============================================================================
 def plot_trend_line(df, x_col, y_col, color=None, title="Trend"):
     """Genereert een standaard trendlijn plot."""
     fig = px.line(df, x=x_col, y=y_col, color=color, markers=True, title=title)
     fig.update_layout(height=300, margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
+
 def interpret_soil_state(df_loc):
     """Genereert automatische tekstinterpretatie van bodemconditie."""
     if df_loc.empty:
         return "Geen data beschikbaar."
-        
-    total_cover = df_loc['totaal_bedekking_locatie'].mean()
-    modes = df_loc['groeivorm'].mode()
-    dom_type = modes[0] if not modes.empty else 'Onbekend'
-    
-    text = f"**Automatische Interpretatie:**\n"
-    
+    total_cover = df_loc["totaal_bedekking_locatie"].mean()
+    modes = df_loc["groeivorm"].mode()
+    dom_type = modes[0] if not modes.empty else "Onbekend"
+    text = "**Automatische Interpretatie:**\n"
     if pd.isna(total_cover):
         text += "Geen bedekkingsgegevens beschikbaar.\n"
     elif total_cover < 5:
         text += "⚠️ **Zeer kale bodem** (<5% bedekking).\n"
-    elif dom_type == 'Ondergedoken':
+    elif dom_type == "Ondergedoken":
         text += f"✅ Goede ontwikkeling (**{total_cover:.0f}%**).\n"
-    elif dom_type == 'Drijvend':
+    elif dom_type == "Drijvend":
         text += f"⚠️ Veel drijfbladplanten (**{total_cover:.0f}%**).\n"
-    elif dom_type == 'Draadalgen':
+    elif dom_type == "Draadalgen":
         text += "❌ Dominantie van draadalgen wijst op verstoring.\n"
-        
     return text
 
-# --- HELPER FUNCTIES VOOR ANALYSE ---
 
+# =============================================================================
+# HELPER FUNCTIES VOOR ANALYSE
+# =============================================================================
 def categorize_slope_trend(val, threshold):
     """Bepaalt de trendcategorie op basis van een drempelwaarde."""
-    if val > threshold: return 'Verbeterend ↗️'
-    elif val < -threshold: return 'Verslechterend ↘️'
-    else: return 'Stabiel ➡️'
+    if val > threshold:
+        return "Verbeterend ↗️"
+    elif val < -threshold:
+        return "Verslechterend ↘️"
+    return "Stabiel ➡️"
+
 
 def get_color_absolute(val, min_v, max_v):
     """Geeft RGB kleur terug van Rood (laag) naar Groen (hoog)."""
-    if pd.isna(val): return [200, 200, 200, 100]
-    
-    # Normaliseren 0-1
+    if pd.isna(val):
+        return [200, 200, 200, 100]
     norm = (val - min_v) / (max_v - min_v) if max_v > min_v else 0.5
     norm = max(0, min(1, norm))
-    
-    # Simpele interpolatie Rood [255,0,0] naar Groen [0,255,0]
     r = int(255 * (1 - norm))
     g = int(255 * norm)
     b = 0
-    return [r, g, b, 200] # alpha 200
+    return [r, g, b, 200]
+
 
 def get_color_diff(val):
     """Geeft Rood (verslechtering), Grijs (stabiel), Groen (verbetering)."""
-    threshold = 0.5 # Drempelwaarde voor relevant verschil
+    threshold = 0.5
     if val < -threshold:
-        return [255, 0, 0, 200] # Rood
+        return [255, 0, 0, 200]
     elif val > threshold:
-        return [0, 255, 0, 200] # Groen
-    else:
-        return [128, 128, 128, 100] # Grijs
+        return [0, 255, 0, 200]
+    return [128, 128, 128, 100]
 
-# --- AGGREGATIE EN KPI FUNCTIES (Vanuit 1_Overzicht.py) ---
 
+# =============================================================================
+# AGGREGATIE EN KPI FUNCTIES
+# =============================================================================
 def get_location_metric_mean(dataframe, metric_col):
     """
     Berekent gemiddelde van een locatie-parameter (zoals WATPTN/Totale Bedekking).
     Stap 1: Unieke waarde per monstername (CollectieReferentie) pakken.
     Stap 2: Gemiddelde daarvan nemen.
     """
-    if dataframe.empty: return 0.0
-    # Group by Sample ID -> take first value (want die is constant voor het sample)
-    per_sample = dataframe.groupby('CollectieReferentie')[metric_col].first()
+    if dataframe.empty:
+        return 0.0
+    per_sample = dataframe.groupby("CollectieReferentie")[metric_col].first()
     return per_sample.mean()
 
+
 def calculate_kpi(curr_df, prev_df, metric_col, is_loc_metric=False):
-    if curr_df.empty: return 0.0, 0.0
-    
+    if curr_df.empty:
+        return 0.0, 0.0
     if is_loc_metric:
         curr_val = get_location_metric_mean(curr_df, metric_col)
         prev_val = get_location_metric_mean(prev_df, metric_col) if not prev_df.empty else curr_val
     else:
-        # Voor metrics op soort-niveau (zoals Eco Score)
         curr_val = curr_df[metric_col].mean()
         prev_val = prev_df[metric_col].mean() if not prev_df.empty else curr_val
-        
     delta = curr_val - prev_val
     return curr_val, delta
 
-# --- KAART VISUALISATIE FUNCTIES (Vanuit 2_Ruimtelijke_analyse.py) ---
 
+# =============================================================================
+# KAART VISUALISATIE FUNCTIES
+# =============================================================================
 def get_color_vegetation(value):
     """Rood (0%) -> Groen (100%)"""
-    if value == 0: return '#d73027'       # Rood (Afwezig)
-    elif value <= 5: return '#fc8d59'     # Oranje
-    elif value <= 15: return '#fee08b'    # Geel
-    elif value <= 40: return '#d9ef8b'    # Lichtgroen
-    elif value <= 75: return '#91cf60'    # Medium Groen
-    else: return '#1a9850'                # Donkergroen
+    if value == 0:
+        return "#d73027"
+    elif value <= 5:
+        return "#fc8d59"
+    elif value <= 15:
+        return "#fee08b"
+    elif value <= 40:
+        return "#d9ef8b"
+    elif value <= 75:
+        return "#91cf60"
+    return "#1a9850"
+
 
 def get_color_depth(value):
     """Lichtblauw (ondiep) -> Donkerblauw (diep)"""
-    if pd.isna(value): return 'gray'
-    elif value < 0.5: return '#eff3ff'    # Heel licht
-    elif value < 1.5: return '#bdd7e7'
-    elif value < 2.5: return '#6baed6'
-    elif value < 4.0: return '#3182bd'
-    else: return '#08519c'                # Donkerblauw
+    if pd.isna(value):
+        return "gray"
+    elif value < 0.5:
+        return "#eff3ff"
+    elif value < 1.5:
+        return "#bdd7e7"
+    elif value < 2.5:
+        return "#6baed6"
+    elif value < 4.0:
+        return "#3182bd"
+    return "#08519c"
+
 
 def get_color_transparency(value):
     """Bruin (weinig zicht) -> Groen (veel zicht)"""
-    if pd.isna(value): return 'gray'
-    elif value < 0.5: return '#8c510a'    # Donkerbruin
-    elif value < 1.0: return '#d8b365'    # Lichtbruin
-    elif value < 1.5: return '#f6e8c3'    # Beige
-    elif value < 2.0: return '#c7eae5'    # Lichtgroen/blauw
-    elif value < 3.0: return '#5ab4ac'    # Medium Groen/Teal
-    else: return '#01665e'                # Donkergroen/Teal
+    if pd.isna(value):
+        return "gray"
+    elif value < 0.5:
+        return "#8c510a"
+    elif value < 1.0:
+        return "#d8b365"
+    elif value < 1.5:
+        return "#f6e8c3"
+    elif value < 2.0:
+        return "#c7eae5"
+    elif value < 3.0:
+        return "#5ab4ac"
+    return "#01665e"
+
 
 def get_color_krw(score):
     """KRW-score 1-5: 1-2 groen, 3-4 oranje, 5 rood."""
-    if pd.isna(score): 
-        return 'gray'
+    if pd.isna(score):
+        return "gray"
     try:
         s = float(score)
-    except:
-        return 'gray'
+    except Exception:
+        return "gray"
     if s <= 2:
-        return '#1a9850'  # groen
+        return "#1a9850"
     elif s <= 4:
-        return '#ff7f0e'  # oranje
-    else:
-        return '#d73027'  # rood
+        return "#ff7f0e"
+    return "#d73027"
 
-import math
-from html import escape
 
 def _polar_to_cart(cx, cy, r, angle_rad):
     return (cx + r * math.cos(angle_rad), cy + r * math.sin(angle_rad))
 
+
 def _wedge_path(cx, cy, r, start_angle, end_angle):
-    # Grote boog?
     large_arc = 1 if (end_angle - start_angle) > math.pi else 0
     x1, y1 = _polar_to_cart(cx, cy, r, start_angle)
     x2, y2 = _polar_to_cart(cx, cy, r, end_angle)
-    # Move center -> line to start -> arc -> close
     return f"M {cx:.2f},{cy:.2f} L {x1:.2f},{y1:.2f} A {r:.2f},{r:.2f} 0 {large_arc} 1 {x2:.2f},{y2:.2f} Z"
+
 
 def pie_svg(
     counts: dict,
@@ -704,20 +1190,17 @@ def pie_svg(
     size=30,
     border=1,
     border_color="#333",
-    fixed_total=None,          # <-- nieuw: bv. 100 voor bedekking%
-    fill_gap=False,            # <-- nieuw: laat rest leeg (transparant) als True
-    gap_color="transparent"    # <-- nieuw: kun je ook '#ffffff' maken
+    fixed_total=None,
+    fill_gap=False,
+    gap_color="transparent",
 ):
     """
     SVG pie chart.
     - Default: normaliseert op som(counts) -> altijd volle cirkel (geschikt voor records).
     - fixed_total=100 + fill_gap=True: sectoren zijn absolute percentages, rest blijft leeg/transparant.
     """
-
-    # Filter nonzero values
     nonzero = [(k, float(v)) for k, v in counts.items() if v is not None and float(v) > 0]
 
-    # Als helemaal geen waarden
     if not nonzero:
         r = (size / 2) - border
         cx = cy = size / 2
@@ -731,28 +1214,20 @@ def pie_svg(
     r = (size / 2) - border
     cx = cy = size / 2
 
-    # Kies de schaal waarop we normaliseren
     if fixed_total is not None:
         denom = float(fixed_total)
-        # Cap: als som > fixed_total, dan knippen we af op fixed_total (geen rescale)
-        # (alternatief: rescale zodat het altijd 100% wordt, maar dat wil jij juist niet)
-        # We tekenen wedges op basis van val/denom; rest blijft leeg.
     else:
         denom = sum(v for _, v in nonzero)
+        if denom <= 0:
+            return (
+                f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
+                f"xmlns='http://www.w3.org/2000/svg'>"
+                f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='#cccccc' stroke='{border_color}' stroke-width='{border}' />"
+                f"</svg>"
+            )
 
-    if denom <= 0:
-        # fallback
-        return (
-            f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
-            f"xmlns='http://www.w3.org/2000/svg'>"
-            f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='#cccccc' stroke='{border_color}' stroke-width='{border}' />"
-            f"</svg>"
-        )
-
-    # ✅ Special-case: 100% volle cirkel (alleen als werkelijk (bijna) volledig)
-    # - Voor fixed_total=100: alleen vol als som >= 99.9
-    # - Voor default: alleen vol als één categorie ~100% van denom
     sum_vals = sum(v for _, v in nonzero)
+
     if fixed_total is not None:
         if (sum_vals / denom) >= 0.999 and len(nonzero) == 1:
             cat, _ = nonzero[0]
@@ -764,7 +1239,6 @@ def pie_svg(
                 f"</svg>"
             )
     else:
-        # default gedrag: als één categorie alles is -> volle cirkel
         if len(nonzero) == 1:
             cat, _ = nonzero[0]
             fill = color_map.get(cat, "#999999")
@@ -776,47 +1250,35 @@ def pie_svg(
             )
 
     cats = order if order else list(counts.keys())
-
-    # Start op -90° (bovenaan)
     start = -math.pi / 2
     paths = []
 
-    # (optioneel) achtergrondvulling voor "gap" (meestal transparant)
-    # Als fill_gap=False doen we niets; de ondergrond blijft transparant.
     if fixed_total is not None and fill_gap and gap_color != "transparent":
         paths.append(f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='{gap_color}' />")
 
-    # Wedges tekenen: angle = (val/denom)*2π
-    # Bij fixed_total: som kan < denom -> overblijvende sector blijft leeg.
     for cat in cats:
         val = float(counts.get(cat, 0) or 0)
         if val <= 0:
             continue
-
         frac = val / denom
         if frac <= 0:
             continue
-
         end = start + frac * 2 * math.pi
         color = color_map.get(cat, "#999999")
-
         d = _wedge_path(cx, cy, r, start, end)
         paths.append(f"<path d='{d}' fill='{color}' />")
-
         start = end
-
-        # Bij fixed_total cap: stop als we (bijna) rond zijn
         if fixed_total is not None and (start - (-math.pi / 2)) >= 2 * math.pi * 0.999:
             break
 
-    # Rand bovenop
     return (
         f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}' "
         f"xmlns='http://www.w3.org/2000/svg'>"
-        + "".join(paths) +
-        f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='none' stroke='{border_color}' stroke-width='{border}' />"
-        f"</svg>"
+        + "".join(paths)
+        + f"<circle cx='{cx}' cy='{cy}' r='{r}' fill='none' stroke='{border_color}' stroke-width='{border}' />"
+        + f"</svg>"
     )
+
 
 def create_pie_map(
     df_locs: pd.DataFrame,
@@ -826,16 +1288,14 @@ def create_pie_map(
     order=None,
     size_px: int = 30,
     zoom_start: int = 10,
-    fixed_total=None,     # <-- nieuw
-    fill_gap=False,       # <-- nieuw
-    gap_color="transparent"
+    fixed_total=None,
+    fill_gap=False,
+    gap_color="transparent",
 ):
     """
     Folium kaart met pie-chart markers (SVG via DivIcon) per locatie.
-    Verwacht df_locs met kolommen: locatie_id, Waterlichaam, lat, lon (+ evt. diepte/doorzicht)
-    counts_by_loc: dict locatie_id -> dict categorie -> count
+    FIX: return pas na loop (anders slechts 1 marker).
     """
-    # Center
     if df_locs["lat"].isnull().all():
         center_lat, center_lon = 52.5, 5.5
     else:
@@ -847,24 +1307,22 @@ def create_pie_map(
         loc_id = getattr(row, "locatie_id")
         wb = getattr(row, "Waterlichaam", "")
         counts = counts_by_loc.get(loc_id, {})
-        svg = pie_svg(counts,
+
+        svg = pie_svg(
+            counts,
             color_map=color_map,
             order=order,
             size=size_px,
             fixed_total=fixed_total,
             fill_gap=fill_gap,
-            gap_color=gap_color
-)
+            gap_color=gap_color,
+        )
 
-        # Tooltip: korte samenvatting
-        # Toon alleen categorieën met >0
         parts = [f"{escape(str(k))}: {int(v)}" for k, v in counts.items() if v]
         dist_txt = "<br/>".join(parts) if parts else "Geen data"
 
-        # Diepte & doorzicht (kunnen NaN zijn)
         diepte = getattr(row, "diepte_m", float("nan"))
         doorzicht = getattr(row, "doorzicht_m", float("nan"))
-
         diepte_txt = "n.v.t." if pd.isna(diepte) else f"{diepte:.2f} m"
         doorzicht_txt = "n.v.t." if pd.isna(doorzicht) else f"{doorzicht:.2f} m"
 
@@ -879,7 +1337,7 @@ def create_pie_map(
         icon = folium.DivIcon(
             html=f"""
             <div style="width:{size_px}px;height:{size_px}px;transform: translate(-50%, -50%);">
-                {svg}
+            {svg}
             </div>
             """
         )
@@ -891,38 +1349,32 @@ def create_pie_map(
 
     return m
 
+
 def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation", category_col=None, category_color_map=None):
     """
     Genereert een Folium kaart (OSM-tiles).
-
-    Args:
-        dataframe: Pandas DataFrame met kolommen 'lat', 'lon', 'waarde_veg', 'diepte_m', 'doorzicht_m', 'Waterlichaam', 'locatie_id'
-        mode: "Vegetatie", "Diepte" of "Doorzicht"
-        label_veg: Label voor de hoofdwaarde in de tooltip
+    FIX: return pas na loop (anders slechts 1 marker).
     """
-    # Centreer kaart
-    if dataframe['lat'].isnull().all():
-        center_lat, center_lon = 52.5, 5.5  # Fallback NL
+    if dataframe["lat"].isnull().all():
+        center_lat, center_lon = 52.5, 5.5
     else:
-        center_lat = dataframe['lat'].mean()
-        center_lon = dataframe['lon'].mean()
+        center_lat = dataframe["lat"].mean()
+        center_lon = dataframe["lon"].mean()
 
     m = folium.Map(location=[center_lat, center_lon], zoom_start=10, control_scale=True)
 
     for row in dataframe.itertuples():
-        # Bepaal hoofdwaarde + kleur + radius door modus
         radius = 5
         fill_opacity = 0.8
+
         if mode == "Vegetatie":
-            # CATEGORISCH
             if value_style == "categorical" and category_col:
                 cat = getattr(row, category_col, None)
-                color = (category_color_map or {}).get(cat, '#999999')
+                color = (category_color_map or {}).get(cat, "#999999")
                 main_line = f"<b>🌱 {label_veg}:</b> {cat}"
                 radius = 6
             else:
-                # NUMERIEK
-                val = getattr(row, 'waarde_veg', 0.0)
+                val = getattr(row, "waarde_veg", 0.0)
                 if value_style == "krw":
                     color = get_color_krw(val)
                     main_line = f"<b>🌱 {label_veg}:</b> {val:.2f}"
@@ -931,12 +1383,14 @@ def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation",
                     color = get_color_vegetation(val)
                     main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
                     radius = 4 + (min(val, 100) / 100 * 6) if val > 0 else 4
+
         elif mode == "Diepte":
-            val = getattr(row, 'diepte_m', float('nan'))
+            val = getattr(row, "diepte_m", float("nan"))
             color = get_color_depth(val)
             main_line = f"<b>🌊 Diepte:</b> {val:.2f} m"
+
         else:  # Doorzicht
-            val = getattr(row, 'doorzicht_m', float('nan'))
+            val = getattr(row, "doorzicht_m", float("nan"))
             color = get_color_transparency(val)
             main_line = f"<b>👁️ Doorzicht:</b> {val:.2f} m"
 
@@ -944,31 +1398,31 @@ def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation",
         trans_line = f"<b>👁️ Doorzicht:</b> {getattr(row, 'doorzicht_m', float('nan')):.2f} m"
 
         tooltip_html = (
-            f"<b>Locatie:</b> {row.locatie_id}<br>"
-            f"<b>Water:</b> {row.Waterlichaam}<br>"
+            f"<b>Locatie:</b> {getattr(row, 'locatie_id', '')}<br>"
+            f"<b>Water:</b> {getattr(row, 'Waterlichaam', '')}<br>"
             f"{main_line}<br>"
             f"{depth_line}<br>"
             f"{trans_line}"
         )
 
-        if getattr(row, 'lat') is not None and getattr(row, 'lon') is not None:
+        if getattr(row, "lat") is not None and getattr(row, "lon") is not None:
             folium.CircleMarker(
                 location=[row.lat, row.lon],
                 radius=radius,
-                color='#333333',  # rand
+                color="#333333",
                 weight=1,
                 fill=True,
                 fill_color=color,
                 fill_opacity=fill_opacity,
-                tooltip=tooltip_html
+                tooltip=tooltip_html,
             ).add_to(m)
 
     return m
 
+
 def df_to_geojson_points(df: pd.DataFrame, value_col: str, id_col: str = "locatie_id"):
     """
     Zet punten (lat/lon) om naar een GeoJSON FeatureCollection.
-    Verwacht kolommen: lat, lon, id_col, value_col
     """
     features = []
     for row in df.dropna(subset=["lat", "lon"]).itertuples(index=False):
@@ -986,7 +1440,6 @@ def df_to_geojson_points(df: pd.DataFrame, value_col: str, id_col: str = "locati
     return {"type": "FeatureCollection", "features": features}
 
 
-
 def render_swipe_map_html(
     geojson_left: dict,
     geojson_right: dict,
@@ -999,24 +1452,17 @@ def render_swipe_map_html(
     center_lon: float,
     zoom: float = 9.0,
     height_px: int = 650,
-    bounds=None,  # [min_lon, min_lat, max_lon, max_lat] of None
+    bounds=None,
 ):
     """
     Rendert een swipe-map met dragbare divider/handle op de kaart zelf (MapLibre in Streamlit html component).
-
-    - Basemap: OpenFreeMap Liberty style URL (direct bruikbaar in MapLibre). [1](https://www.npmjs.com/package/@stadiamaps/maplibre-search-box)
-    - map_left: basemap grijs via setPaintProperty (punten blijven kleur). [2](https://github.com/maptiler/tileserver-gl)[3](https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/c82a783a-9a58-4761-a809-b4c5d90dcd35)
-    - bounds: optional [min_lon, min_lat, max_lon, max_lat] -> fitBounds
+    (Ongewijzigd t.o.v. je bestaande implementatie)
     """
-
-    # OpenFreeMap style URL (vector basemap)
-    style_url = "https://tiles.openfreemap.org/styles/liberty"  # [1](https://www.npmjs.com/package/@stadiamaps/maplibre-search-box)
-
+    style_url = "https://tiles.openfreemap.org/styles/liberty"
     left_json = json.dumps(geojson_left)
     right_json = json.dumps(geojson_right)
     bounds_json = "null" if bounds is None else json.dumps(bounds)
 
-    # Veilig: als min == max, maak kleine marge zodat interpolate werkt
     if max_val == min_val:
         max_val = min_val + 1e-6
 
@@ -1025,10 +1471,8 @@ def render_swipe_map_html(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-
   <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-
   <style>
     body {{ margin: 0; padding: 0; }}
     #wrap {{
@@ -1041,71 +1485,36 @@ def render_swipe_map_html(
       background: #f7f7f7;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }}
-
-    /* Onderliggende kaart (jaar links) */
-    #map_left {{
-      position: absolute;
-      inset: 0;
-    }}
-
-    /* Bovenliggende kaart (jaar rechts) */
-    #map_right {{
-      position: absolute;
-      inset: 0;
-      clip-path: inset(0 0 0 50%);
-    }}
-
-    /* Divider lijn */
+    #map_left {{ position: absolute; inset: 0; }}
+    #map_right {{ position: absolute; inset: 0; clip-path: inset(0 0 0 50%); }}
     #divider {{
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      left: 50%;
-      width: 2px;
-      background: rgba(230,230,230,0.95);
+      position: absolute; top: 0; bottom: 0; left: 50%;
+      width: 2px; background: rgba(230,230,230,0.95);
       box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
-      z-index: 10;
-      cursor: ew-resize;
+      z-index: 10; cursor: ew-resize;
     }}
-
-    /* Handle */
     #handle {{
-      position: absolute;
-      left: 50%;
-      top: 50%;
+      position: absolute; left: 50%; top: 50%;
       transform: translate(-50%, -50%);
-      width: 16px;
-      height: 120px;
-      border-radius: 10px;
+      width: 16px; height: 120px; border-radius: 10px;
       background: rgba(255,255,255,0.95);
       border: 1px solid rgba(0,0,0,0.15);
       box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-      z-index: 11;
-      cursor: ew-resize;
+      z-index: 11; cursor: ew-resize;
     }}
-
-    /* Jaarlabels */
     .year-label {{
-      position: absolute;
-      top: 18px;
-      font-size: 44px;
-      font-weight: 700;
+      position: absolute; top: 18px;
+      font-size: 44px; font-weight: 700;
       color: rgba(0,0,0,0.78);
       text-shadow: 0 1px 0 rgba(255,255,255,0.6);
-      z-index: 12;
-      pointer-events: none;
+      z-index: 12; pointer-events: none;
     }}
     #label_left {{ left: 30px; opacity: 0.40; }}
     #label_right {{ right: 30px; opacity: 0.95; }}
-
-    /* Legenda */
     #legend {{
-      position: absolute;
-      left: 50%;
-      bottom: 20px;
+      position: absolute; left: 50%; bottom: 20px;
       transform: translateX(-50%);
-      width: 520px;
-      max-width: calc(100% - 40px);
+      width: 520px; max-width: calc(100% - 40px);
       background: rgba(255,255,255,0.90);
       border: 1px solid rgba(0,0,0,0.12);
       border-radius: 12px;
@@ -1114,46 +1523,35 @@ def render_swipe_map_html(
       backdrop-filter: blur(3px);
     }}
     #legend .title {{
-      text-align: center;
-      font-size: 22px;
-      font-weight: 700;
+      text-align: center; font-size: 22px; font-weight: 700;
       margin-bottom: 8px;
     }}
     #legend .bar {{
-      height: 14px;
-      border-radius: 8px;
+      height: 14px; border-radius: 8px;
       border: 1px solid rgba(0,0,0,0.12);
       background: linear-gradient(90deg, #d73027 0%, #fee08b 50%, #1a9850 100%);
     }}
     #legend .labels {{
-      display: flex;
-      justify-content: space-between;
+      display: flex; justify-content: space-between;
       margin-top: 8px;
-      font-size: 16px;
-      font-weight: 650;
+      font-size: 16px; font-weight: 650;
       color: rgba(0,0,0,0.80);
     }}
     #legend .sub {{
-      text-align: center;
-      margin-top: 3px;
-      font-size: 14px;
-      color: rgba(0,0,0,0.60);
+      text-align: center; margin-top: 3px;
+      font-size: 14px; color: rgba(0,0,0,0.60);
       font-weight: 600;
     }}
   </style>
 </head>
-
 <body>
   <div id="wrap">
     <div id="map_left"></div>
     <div id="map_right"></div>
-
     <div id="divider"></div>
     <div id="handle"></div>
-
     <div id="label_left" class="year-label">{year_left}</div>
     <div id="label_right" class="year-label">{year_right}</div>
-
     <div id="legend">
       <div class="title">{metric_label}</div>
       <div class="bar"></div>
@@ -1166,7 +1564,6 @@ def render_swipe_map_html(
   const styleUrl = "{style_url}";
   const leftData = {left_json};
   const rightData = {right_json};
-
   const minVal = {min_val};
   const maxVal = {max_val};
   const bounds = {bounds_json};
@@ -1188,17 +1585,14 @@ def render_swipe_map_html(
     interactive: true
   }});
 
-    // Disable interacties zodat rechts niet “los” bedienbaar wordt
-    mapRight.scrollZoom.disable();
-    mapRight.boxZoom.disable();
-    mapRight.dragRotate.disable();
-    mapRight.dragPan.disable();
-    mapRight.keyboard.disable();
-    mapRight.doubleClickZoom.disable();
-    mapRight.touchZoomRotate.disable();
+  mapRight.scrollZoom.disable();
+  mapRight.boxZoom.disable();
+  mapRight.dragRotate.disable();
+  mapRight.dragPan.disable();
+  mapRight.keyboard.disable();
+  mapRight.doubleClickZoom.disable();
+  mapRight.touchZoomRotate.disable();
 
-
-  // Sync view (links -> rechts)
   function sync() {{
     const c = mapLeft.getCenter();
     mapRight.jumpTo({{
@@ -1211,13 +1605,10 @@ def render_swipe_map_html(
   mapLeft.on('move', sync);
   mapLeft.on('moveend', sync);
 
-  // --- Basemap (OpenFreeMap layers) grijs maken op mapLeft ---
-  // We overschrijven paint-properties per layer type via setPaintProperty. [2](https://github.com/maptiler/tileserver-gl)[3](https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/c82a783a-9a58-4761-a809-b4c5d90dcd35)
   function applyBasemapGray(map) {{
     const style = map.getStyle();
     const layers = (style && style.layers) ? style.layers : [];
-
-    const GRAY_BG   = "#e7e7e7";
+    const GRAY_BG = "#e7e7e7";
     const GRAY_FILL = "#cdcdcd";
     const GRAY_LINE = "#9c9c9c";
     const GRAY_TEXT = "#666666";
@@ -1225,71 +1616,56 @@ def render_swipe_map_html(
 
     layers.forEach((ly) => {{
       if (!ly || !ly.id) return;
-
       try {{
         switch (ly.type) {{
           case "background":
             map.setPaintProperty(ly.id, "background-color", GRAY_BG);
             break;
-
           case "fill":
             try {{ map.setPaintProperty(ly.id, "fill-pattern", null); }} catch(e) {{}}
             map.setPaintProperty(ly.id, "fill-color", GRAY_FILL);
             try {{ map.setPaintProperty(ly.id, "fill-outline-color", "#b0b0b0"); }} catch(e) {{}}
             break;
-
           case "fill-extrusion":
             map.setPaintProperty(ly.id, "fill-extrusion-color", GRAY_FILL);
             break;
-
           case "line":
             try {{ map.setPaintProperty(ly.id, "line-pattern", null); }} catch(e) {{}}
             map.setPaintProperty(ly.id, "line-color", GRAY_LINE);
             break;
-
           case "symbol":
             try {{ map.setPaintProperty(ly.id, "text-color", GRAY_TEXT); }} catch(e) {{}}
             try {{ map.setPaintProperty(ly.id, "text-halo-color", GRAY_HALO); }} catch(e) {{}}
             try {{ map.setPaintProperty(ly.id, "icon-color", GRAY_TEXT); }} catch(e) {{}}
             try {{ map.setPaintProperty(ly.id, "text-opacity", 0.85); }} catch(e) {{}}
             break;
-
           case "circle":
-            // POI's etc. in basemap dimmen
             map.setPaintProperty(ly.id, "circle-color", GRAY_LINE);
             try {{ map.setPaintProperty(ly.id, "circle-opacity", 0.35); }} catch(e) {{}}
             break;
-
           case "heatmap":
             try {{ map.setPaintProperty(ly.id, "heatmap-opacity", 0.25); }} catch(e) {{}}
             break;
-
           case "raster":
-            // Voor het geval een style raster layers bevat
             try {{ map.setPaintProperty(ly.id, "raster-saturation", -1); }} catch(e) {{}}
             break;
-
           default:
             break;
         }}
       }} catch (e) {{
-        // stil negeren
       }}
     }});
   }}
 
-  // --- Punten toevoegen (kleur blijft) ---
   function addPoints(map, sourceName, layerName, data, dim=false) {{
     if (map.getSource(sourceName)) {{
       map.getSource(sourceName).setData(data);
       return;
     }}
-
     map.addSource(sourceName, {{
       type: 'geojson',
       data: data
     }});
-
     map.addLayer({{
       id: layerName,
       type: 'circle',
@@ -1310,13 +1686,9 @@ def render_swipe_map_html(
   }}
 
   mapLeft.on('load', () => {{
-    // 1) eerst basemap links grijs
     applyBasemapGray(mapLeft);
-
-    // 2) punten links toevoegen (kleur houden, desnoods iets dimmen)
     addPoints(mapLeft, 'leftPts', 'leftLayer', leftData, true);
 
-    // 3) autozoom
     if (bounds && bounds.length === 4) {{
       const sw = [bounds[0], bounds[1]];
       const ne = [bounds[2], bounds[3]];
@@ -1327,7 +1699,6 @@ def render_swipe_map_html(
       }});
     }}
 
-    // tooltip op linkerpuntlaag
     const popup = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
     mapLeft.on('mousemove', 'leftLayer', (e) => {{
       mapLeft.getCanvas().style.cursor = 'pointer';
@@ -1343,50 +1714,40 @@ def render_swipe_map_html(
     }});
   }});
 
-mapRight.on('load', () => {{
-  // overlay (rechts) normaal, niet dimmen
-  addPoints(mapRight, 'rightPts', 'rightLayer', rightData, false);
+  
+  mapRight.on('load', () => {{
+    addPoints(mapRight, 'rightPts', 'rightLayer', rightData, false);
 
-  // tooltip op rechterpuntlaag
-  const popupR = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
-
-  mapRight.on('mousemove', 'rightLayer', (e) => {{
-    mapRight.getCanvas().style.cursor = 'pointer';
-    if (!e.features || !e.features.length) return;
-
-    const p = e.features[0].properties;
-    const v =
-      (p.value === null || p.value === undefined || p.value === "" || isNaN(Number(p.value)))
+    const popupR = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
+    mapRight.on('mousemove', 'rightLayer', (e) => {{
+      mapRight.getCanvas().style.cursor = 'pointer';
+      if (!e.features || !e.features.length) return;
+      const p = e.features[0].properties;
+      const v = (p.value === null || p.value === undefined || p.value === "" || isNaN(Number(p.value)))
         ? "n.v.t."
         : Number(p.value).toFixed(1);
-
-    popupR
-      .setLngLat(e.lngLat)
-      .setHTML(
-        `<b>Locatie:</b> ${{p.locatie_id}}<br/>` +
-        `<b>Waarde ({year_right}):</b> ${{v}}`
-      )
-      .addTo(mapRight);
+      popupR
+        .setLngLat(e.lngLat)
+        .setHTML(`<b>Locatie:</b> ${{p.locatie_id}}<br/><b>Waarde ({year_right}):</b> ${{v}}`)
+        .addTo(mapRight);
+    }});
+    mapRight.on('mouseleave', 'rightLayer', () => {{
+      mapRight.getCanvas().style.cursor = '';
+      popupR.remove();
+    }});
   }});
 
-  mapRight.on('mouseleave', 'rightLayer', () => {{
-    mapRight.getCanvas().style.cursor = '';
-    popupR.remove();
-  }});
-}});
-
-
-  // --- Swipe mechanics ---
+  // ------------------------------------------------------------------
+  // Swipe divider/handle (DOM)
+  // ------------------------------------------------------------------
   const wrap = document.getElementById('wrap');
   const mapRightDiv = document.getElementById('map_right');
   const divider = document.getElementById('divider');
   const handle = document.getElementById('handle');
-
   let isDragging = false;
-  let pct = 0.5;
 
   function setSwipe(p) {{
-    pct = Math.max(0, Math.min(1, p));
+    const pct = Math.max(0, Math.min(1, p));
     const x = pct * wrap.clientWidth;
     divider.style.left = x + 'px';
     handle.style.left = x + 'px';
@@ -1404,12 +1765,14 @@ mapRight.on('load', () => {{
     setSwipe(pointerToPct(x));
     e.preventDefault();
   }}
+
   function onMove(e) {{
     if (!isDragging) return;
     const x = e.touches ? e.touches[0].clientX : e.clientX;
     setSwipe(pointerToPct(x));
     e.preventDefault();
   }}
+
   function onUp() {{
     isDragging = false;
   }}
