@@ -19,4 +19,3 @@ MM 2019 goed, 2021 invloed markermeerdijken en 2024 weer hersteld
 - p1, alles wat niet op trofieniveau gematcht kan worden, dat ook weergeven
 - p2, alles wat niet op trofieniveau gematcht kan worden, dat ook weergeven
 - P2, diepte, doorzicht kaartlagen werken niet
-

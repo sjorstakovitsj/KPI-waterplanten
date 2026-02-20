@@ -726,11 +726,11 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
                 SELECT
                     *,
                     COALESCE(
-                        TRY_CAST(MetingDatumTijd AS TIMESTAMP),
-                        TRY_STRPTIME(MetingDatumTijd, '%d-%m-%Y %H:%M:%S'),
-                        TRY_STRPTIME(MetingDatumTijd, '%d-%m-%Y'),
-                        TRY_STRPTIME(MetingDatumTijd, '%Y-%m-%d %H:%M:%S'),
-                        TRY_STRPTIME(MetingDatumTijd, '%Y-%m-%d')
+                    TRY_CAST(MetingDatumTijd AS TIMESTAMP),
+                    TRY_STRPTIME(CAST(MetingDatumTijd AS VARCHAR), '%d-%m-%Y %H:%M:%S'),
+                    TRY_STRPTIME(CAST(MetingDatumTijd AS VARCHAR), '%d-%m-%Y'),
+                    TRY_STRPTIME(CAST(MetingDatumTijd AS VARCHAR), '%Y-%m-%d %H:%M:%S'),
+                    TRY_STRPTIME(CAST(MetingDatumTijd AS VARCHAR), '%Y-%m-%d')
                     ) AS meting_ts
                 FROM read_parquet('{MEAS_PARQUET.as_posix()}')
             ),
