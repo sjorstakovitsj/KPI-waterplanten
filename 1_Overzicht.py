@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-
 from utils import load_data, add_species_group_columns, calculate_kpi
 
 st.set_page_config(page_title="Waterplanten Monitor", layout="wide")
@@ -44,7 +43,6 @@ def _match_prev_by_waterbody(df_filtered: pd.DataFrame, selected_year: int) -> t
         .max()
         .rename(columns={"jaar": "prev_jaar"})
     )
-
     if df_prev_years.empty:
         # Geen vorige metingen beschikbaar
         return df_year.iloc[0:0].copy(), pd.DataFrame(columns=df_filtered.columns)
@@ -165,6 +163,25 @@ def _trend_speciesgroups_fraction(df_trend_base: pd.DataFrame) -> pd.DataFrame:
     out.loc[mask, "fractie_tov_totaal"] = out.loc[mask, "bedekkingsgraad_proc"] / out.loc[mask, "totaal_bedekking_jaar"]
     return out
 
+@st.cache_data(show_spinner=False)
+def _speciesgroup_counts(df_individual_species: pd.DataFrame) -> pd.DataFrame:
+    """
+    Verdeling waarnemingen per soortgroep (op basis van individuele soorten in df_individual_species).
+    Verwacht: kolommen 'soort' en (via utils) mapping naar 'soortgroep'.
+    """
+    if df_individual_species.empty:
+        return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
+    df_mapped = add_species_group_columns(df_individual_species.copy())
+    if "soortgroep" not in df_mapped.columns:
+        return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
+    s = df_mapped["soortgroep"].dropna()
+    if s.empty:
+        return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
+    out = s.value_counts().rename_axis("Soortgroep").reset_index(name="Aantal waarnemingen")
+    return out
 
 # -----------------------------------------------------------------------------
 # DATA LOAD
@@ -196,7 +213,6 @@ df_year_matched, df_prev_matched = _match_prev_by_waterbody(df_filtered, int(sel
 # Voor onderdelen die ook de “huidige jaar” selectie zonder match willen:
 df_year = df_filtered[df_filtered["jaar"] == selected_year].copy()
 
-
 # -----------------------------------------------------------------------------
 # 1. KPI’s
 # -----------------------------------------------------------------------------
@@ -211,10 +227,14 @@ n_soorten = df_year_species["soort"].nunique()
 prev_soorten = df_prev_species["soort"].nunique() if not df_prev_species.empty else n_soorten
 d_soorten = n_soorten - prev_soorten
 
+# -----------------------------------------------------------------------------
+# Pie charts: samenstelling waarnemingen
+# -----------------------------------------------------------------------------
 st.subheader("🥧 Samenstelling waarnemingen (individuele soorten)")
 df_ind = df_year[(df_year["type"] == "Soort") & (~df_year["soort"].isin(RWS_GROEIVORM_CODES))].copy()
 
-c_pie1, c_pie2 = st.columns(2)
+# >>> AANGEPAST: 3 kolommen i.p.v. 2
+c_pie1, c_pie2, c_pie3 = st.columns(3)
 
 with c_pie1:
     st.markdown("**Verdeling waarnemingen per KRW-score**")
@@ -276,6 +296,26 @@ De indeling van soorten naar trofieniveau is gebaseerd op:
 """
         )
 
+# >>> NIEUW: derde taartdiagram voor soortgroep
+with c_pie3:
+    st.markdown("**Verdeling waarnemingen per soortgroep**")
+    pie_df = _speciesgroup_counts(df_ind)
+
+    if pie_df.empty:
+        st.info("Geen soortgroep-indeling beschikbaar voor de huidige selectie (check mapping in utils.add_species_group_columns).")
+    else:
+        fig_group = px.pie(
+            pie_df,
+            names="Soortgroep",
+            values="Aantal waarnemingen",
+            hole=0.35,
+            color_discrete_sequence=px.colors.qualitative.Set3,
+        )
+        fig_group.update_traces(textposition="inside", textinfo="percent+label")
+        fig_group.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_group, use_container_width=True)
+
+# KPI-metrics (blijven gelijk)
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     st.metric("gem. totale bedekking", f"{avg_bedekking:.1f}%", f"{d_bedekking:.1f}%")
@@ -292,8 +332,8 @@ st.divider()
 # 2. Detailoverzicht per waterlichaam
 # -----------------------------------------------------------------------------
 st.subheader(f"📊 Opsomming per waterlichaam ({selected_year})")
-
 overview_df = _overview_per_waterbody(df_year)
+
 if overview_df.empty:
     st.info("Geen data beschikbaar voor de huidige filters.")
 else:
@@ -310,91 +350,3 @@ else:
     )
 
 st.divider()
-
-# -----------------------------------------------------------------------------
-# 3. Trendanalyse
-# -----------------------------------------------------------------------------
-st.subheader("📈 Basale trendanalyse")
-
-available_bodies = sorted(df_filtered["Waterlichaam"].dropna().unique())
-selected_trend_bodies = st.multiselect(
-    "Selecteer waterlichaam / waterlichamen voor trendlijn:",
-    options=available_bodies,
-    default=available_bodies[:3] if len(available_bodies) > 0 else available_bodies,
-)
-
-if selected_trend_bodies:
-    df_trend_base = df_filtered[df_filtered["Waterlichaam"].isin(selected_trend_bodies)].copy()
-
-    c_trend1, c_trend2 = st.columns(2)
-
-    with c_trend1:
-        st.markdown("**Totale bedekking**")
-        df_trend_cover = _trend_cover(df_trend_base)
-        fig_cover = px.line(
-            df_trend_cover,
-            x="jaar",
-            y="totaal_bedekking_locatie",
-            color="Waterlichaam",
-            markers=True,
-            title="Trend totale Bedekking (%) per waterlichaam",
-        )
-        fig_cover.update_layout(height=350, legend=dict(orientation="h", y=-0.2))
-        st.plotly_chart(fig_cover, use_container_width=True)
-
-    with c_trend2:
-        st.markdown("**Samenstelling groeivormen**")
-        df_form_trend = _trend_forms(df_trend_base)
-        if df_form_trend.empty:
-            st.info("Geen groeivorm-groepen (zoals 'Ondergedoken', 'Drijvend') gevonden in de selectie.")
-        else:
-            fig_forms = px.area(
-                df_form_trend,
-                x="jaar",
-                y="bedekking_pct",
-                color="groeivorm",
-                markers=True,
-                title="Trend groeivormen (gemiddelden)",
-            )
-            fig_forms.update_layout(height=350, legend=dict(orientation="h", y=-0.2))
-            st.plotly_chart(fig_forms, use_container_width=True)
-
-    st.divider()
-    st.markdown("**Relatieve samenstelling soortgroepen**")
-
-    with st.expander("ℹ️ Hoe komt deze grafiek tot stand?"):
-        st.markdown(
-            """
-**Wat zie je?**  
-Per jaar: de bijdrage van soortgroepen aan de totale bedekking (WATPTN).  
-**Stap 1 — Filtering:** groeivormcodes en `type='Groep'` worden uitgesloten (alleen echte soorten).  
-**Stap 2 — Indeling:** soorten krijgen een `soortgroep` via mapping en een numerieke bedekking (`bedekkingsgraad_proc`).  
-**Stap 3 — Teller:** per jaar en soortgroep wordt bedekking opgeteld.  
-**Stap 4 — Noemer:** totale bedekking (WATPTN) wordt per monstername (`CollectieReferentie`) 1× meegeteld en per jaar gesommeerd.  
-**Stap 5 — Fractie:** teller / noemer = fractie t.o.v. totale bedekking.  
-
-**Waarom geen 100%-stack?**  
-De staafhoogte mag <1 blijven: zo zie je ook welk deel van WATPTN niet door de getoonde soortgroepen wordt verklaard.
-"""
-        )
-
-    df_trend_species = _trend_speciesgroups_fraction(df_trend_base)
-    if df_trend_species.empty:
-        st.info("Geen soort-specifieke data gevonden voor deze selectie.")
-    else:
-        fig_stack = px.bar(
-            df_trend_species,
-            x="jaar",
-            y="fractie_tov_totaal",
-            color="soortgroep",
-            title="Samenstelling soortgroepen t.o.v. totale bedekking (WATPTN) – geselecteerde waterlichamen",
-            labels={
-                "fractie_tov_totaal": "Fractie van totale bedekking",
-                "jaar": "Jaar",
-                "soortgroep": "Groep",
-            },
-            color_discrete_sequence=px.colors.qualitative.Safe,
-            height=500,
-        )
-        fig_stack.update_layout(yaxis=dict(range=[0, 1]))
-        st.plotly_chart(fig_stack, use_container_width=True)

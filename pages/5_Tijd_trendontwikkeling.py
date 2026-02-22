@@ -139,6 +139,45 @@ def _compute_slopes_vectorized(df_trend: pd.DataFrame, min_years: int = 5) -> pd
     return out
 
 
+def _trend_cover(df_in: pd.DataFrame) -> pd.DataFrame:
+    required = {"Waterlichaam", "jaar", "locatie_id", "bedekking_pct"}
+    if df_in.empty or not required.issubset(df_in.columns):
+        return pd.DataFrame(columns=["Waterlichaam", "jaar", "totaal_bedekking_locatie"])
+
+    # Filter op soort + BEDKG waar mogelijk (zonder join, maar direct op df_in)
+    dfx = df_in.copy()
+
+    if "type" in dfx.columns:
+        dfx = dfx.loc[dfx["type"] == "Soort"].copy()
+
+    if "Grootheid" in dfx.columns:
+        dfx = dfx.loc[dfx["Grootheid"] == "BEDKG"].copy()
+
+    dfx = dfx[["Waterlichaam", "jaar", "locatie_id", "bedekking_pct"]].copy()
+    dfx["jaar"] = pd.to_numeric(dfx["jaar"], errors="coerce")
+    dfx["bedekking_pct"] = _as_numeric(dfx["bedekking_pct"])
+    dfx = dfx.dropna(subset=["Waterlichaam", "jaar", "locatie_id", "bedekking_pct"])
+
+    if dfx.empty:
+        return pd.DataFrame(columns=["Waterlichaam", "jaar", "totaal_bedekking_locatie"])
+
+    dfx["jaar"] = dfx["jaar"].astype(int)
+
+    per_loc = (
+        dfx.groupby(["Waterlichaam", "jaar", "locatie_id"], sort=False, observed=True)["bedekking_pct"]
+        .sum()
+        .reset_index(name="totaal_bedekking_locatie")
+    )
+
+    out = (
+        per_loc.groupby(["Waterlichaam", "jaar"], sort=False, observed=True)["totaal_bedekking_locatie"]
+        .mean()
+        .reset_index()
+        .sort_values(["Waterlichaam", "jaar"])
+    )
+
+    return out
+
 # -----------------------------------------------------------------------------
 # Streamlit pagina
 # -----------------------------------------------------------------------------
@@ -429,6 +468,36 @@ else:
                 """,
                 unsafe_allow_html=True,
             )
+
+
+# -----------------------------------------------------------------------------
+# (Nieuw) 0B) Basale trendanalyse – c1 grafiek (Totale bedekking)
+# -----------------------------------------------------------------------------
+st.subheader("📈 Basale trendanalyse – Totale bedekking")
+
+df_trend_cover = _trend_cover(df_filtered)
+
+if df_trend_cover.empty:
+    st.info("Geen (soort-)bedekkingsdata (BEDKG) gevonden binnen de huidige sidebar-filters.")
+else:
+    title_extra = f" – {selected_species}" if species_is_selected else ""
+    fig_cover = px.line(
+        df_trend_cover,
+        x="jaar",
+        y="totaal_bedekking_locatie",
+        color="Waterlichaam",
+        markers=True,
+        title=f"Trend totale bedekking (%) per waterlichaam{title_extra}",
+        labels={
+            "jaar": "Jaar",
+            "totaal_bedekking_locatie": "Totale bedekking (%)",
+            "Waterlichaam": "Waterlichaam",
+        },
+    )
+    fig_cover.update_layout(height=380, legend=dict(orientation="h", y=-0.25))
+    st.plotly_chart(fig_cover, use_container_width=True)
+
+
 
 # -------------------------------------------------------------
 # 1) Tijdreeks trendlijnen

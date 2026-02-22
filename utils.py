@@ -32,7 +32,7 @@ except Exception:
 # =============================================================================
 # CONFIGURATIE
 # =============================================================================
-FILE_PATH = "AquaDeskMeasurementExport_RWS_20260129204403.csv"
+FILE_PATH = "AquaDeskMeasurementExport_RWS_20260222163559.csv"
 SPECIES_LOOKUP_PATH = "Koppeltabel_score_namen.csv"
 
 BASE_DIR = Path(__file__).resolve().parent
