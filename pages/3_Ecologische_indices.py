@@ -313,7 +313,7 @@ else:
             annotation_position="top left",
         )
 
-        st.plotly_chart(fig_bubble, use_container_width=True)
+        st.plotly_chart(fig_bubble, width='stretch')
 
 # -----------------------------------------------------------------------------
 # HEATMAP
@@ -378,7 +378,7 @@ else:
             textfont=dict(color="white", size=12),
         )
         fig.update_layout(uniformtext_minsize=8, uniformtext_mode="show", height=650, yaxis=dict(side="left"))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         if heatmap_param == "Trofieniveau":
             st.caption(

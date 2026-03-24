@@ -140,7 +140,7 @@ with tab1:
         height=450,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 with tab2:
     latest_year = df_loc["jaar"].dropna().max()
@@ -183,11 +183,11 @@ with tab2:
                 st.dataframe(
                     df_combined.sort_values("bedekking_pct", ascending=False)
                     .style.background_gradient(subset=["bedekking_pct"], cmap="Greens"),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
             else:
                 st.info(f"Geen specifieke soorten geregistreerd in {int(latest_year)}.")
                 if not species_history.empty:
                     st.write("Historisch aangetroffen soorten (niet in laatste jaar):")
-                    st.dataframe(species_history, use_container_width=True, hide_index=True)
+                    st.dataframe(species_history, width='stretch', hide_index=True)

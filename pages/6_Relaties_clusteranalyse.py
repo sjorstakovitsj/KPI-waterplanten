@@ -53,7 +53,7 @@ with c1:
         title="Doorzicht/Diepte vs Bedekking",
         labels={"zicht_per_diepte": "Doorzicht / Diepte (-)", "bedekking_pct": "Bedekking (%)"},
     )
-    st.plotly_chart(fig_scat1, use_container_width=True)
+    st.plotly_chart(fig_scat1, width='stretch')
 
 with c2:
     # Optioneel: soortenrijkdom zuiverder maken (default UIT zodat functionaliteit niet verandert)
@@ -87,7 +87,7 @@ with c2:
         title="Doorzicht/Diepte vs Soortenrijkdom",
         labels={"zicht_per_diepte": "Doorzicht / Diepte (-)", "soort": "Soortenrijkdom (#)"},
     )
-    st.plotly_chart(fig_scat2, use_container_width=True)
+    st.plotly_chart(fig_scat2, width='stretch')
 
 # -----------------------------
 # PCA ANALYSE
@@ -185,7 +185,7 @@ else:
 
 fig_pca.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
 fig_pca.add_vline(x=0, line_dash="dash", line_color="grey", opacity=0.5)
-st.plotly_chart(fig_pca, use_container_width=True)
+st.plotly_chart(fig_pca, width='stretch')
 
 st.caption(
     f"NB.: {var_text}. Dit betekent dat deze 2D-weergave ongeveer {sum(explained_variance):.0%} van de totale verschillen in vegetatie samenvat."

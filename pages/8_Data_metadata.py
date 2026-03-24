@@ -57,7 +57,7 @@ fig_heat = px.imshow(
     color_continuous_scale="Blues",
 )
 fig_heat.update_layout(height=800)
-st.plotly_chart(fig_heat, use_container_width=True)
+st.plotly_chart(fig_heat, width='stretch')
 
 # --- 3. WAARNEMINGEN PER JAAR ---
 st.subheader("📊 Waarnemingsinspanning per jaar")
@@ -68,7 +68,7 @@ locs_per_year = df.groupby("jaar")["locatie_id"].nunique().reset_index(name="aan
 c1, c2 = st.columns(2)
 with c1:
     fig_obs = px.bar(obs_per_year, x="jaar", y="aantal_records", title="Totaal aantal records per jaar")
-    st.plotly_chart(fig_obs, use_container_width=True)
+    st.plotly_chart(fig_obs, width='stretch')
 
 with c2:
     fig_locs = px.line(
@@ -80,7 +80,7 @@ with c2:
         line_shape="spline",
     )
     fig_locs.update_yaxes(range=[0, int(df["locatie_id"].nunique()) + 5])
-    st.plotly_chart(fig_locs, use_container_width=True)
+    st.plotly_chart(fig_locs, width='stretch')
 
 # --- 4. CONSISTENTIE SOORTENNAAM ---
 st.divider()
@@ -128,7 +128,7 @@ else:
     # (optioneel) handige context in de UI
     st.caption(f"Taxonomische consistentie gebaseerd op {total_records:,} records van individuele soorten (excl. aggregatiecodes).")
 
-    st.dataframe(species_counts[["Soortnaam", "Aantal Records", "Percentage", "Status"]], use_container_width=True)
+    st.dataframe(species_counts[["Soortnaam", "Aantal Records", "Percentage", "Status"]], width='stretch')
 
 # --- 5. RUIMTELIJKE SPREIDING ---
 st.subheader("Ruimtelijke dekking meetnet")

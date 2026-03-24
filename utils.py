@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import json
 import math
+import urllib.parse
 from html import escape
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -47,7 +48,7 @@ LOOKUP_PARQUET = CACHE_DIR / "species_lookup.parquet"
 COORD_CACHE_PARQUET = CACHE_DIR / "coord_cache.parquet"
 
 # Verhoog dit als je pipeline-logica wijzigt (force rebuild via cache key)
-PIPELINE_VERSION = "2026-02-20_duckdb_parquet_coords_v2"
+PIPELINE_VERSION = "2026-03-24_duckdb_parquet_coords_v3_nomatch_schema"
 
 
 # =============================================================================
@@ -110,6 +111,75 @@ KRW_WATERTYPE_BY_WATERLICHAAM = {
 }
 
 
+
+
+# =============================================================================
+# BATHYMETRIE / BASEMAP HELPERS
+# =============================================================================
+WMS_BASE_URL = 'https://geo.rijkswaterstaat.nl/services/ogc/gdr/bodemhoogte_ijsselmeergebied/ows'
+WMS_LAYER_NAME = 'bodemhoogte_ijg_2022'
+WMS_ATTRIBUTION = 'Rijkswaterstaat bathymetrie IJsselmeergebied'
+
+
+def build_bathymetry_legend_url() -> str:
+    """Legend URL voor dezelfde bathymetrie-WMS als in st_plot.py."""
+    params = {
+        'SERVICE': 'WMS',
+        'REQUEST': 'GetLegendGraphic',
+        'VERSION': '1.0.0',
+        'FORMAT': 'image/png',
+        'LAYER': WMS_LAYER_NAME,
+        'STYLE': '',
+    }
+    return f"{WMS_BASE_URL}?{urllib.parse.urlencode(params)}"
+
+
+def add_bathymetry_wms(map_obj: folium.Map) -> folium.Map:
+    """Voeg de RWS-bathymetrie als basislaag toe aan een Folium-kaart."""
+    if map_obj is None:
+        return map_obj
+    folium.raster_layers.WmsTileLayer(
+        url=WMS_BASE_URL,
+        name='Bathymetrie IJsselmeergebied',
+        layers=WMS_LAYER_NAME,
+        fmt='image/png',
+        transparent=True,
+        version='1.3.0',
+        attr=WMS_ATTRIBUTION,
+        overlay=False,
+        control=True,
+        show=True,
+    ).add_to(map_obj)
+    return map_obj
+
+
+def create_folium_base_map(
+    center_lat: float,
+    center_lon: float,
+    zoom_start: int = 10,
+    control_scale: bool = True,
+    basemap: str = 'default',
+) -> folium.Map:
+    """Maak een Folium-basiskaart.
+
+    basemap='default'     -> bestaand gedrag (OSM)
+    basemap='bathymetry'  -> geen OSM, wel RWS bathymetrie-WMS
+    """
+    use_bathymetry = str(basemap).strip().lower() == 'bathymetry'
+    if use_bathymetry:
+        m = folium.Map(
+            location=[center_lat, center_lon],
+            zoom_start=zoom_start,
+            control_scale=control_scale,
+            tiles=None,
+        )
+        add_bathymetry_wms(m)
+        return m
+    return folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom_start,
+        control_scale=control_scale,
+    )
 # =============================================================================
 # DUCKDB / PARQUET HELPERS
 # =============================================================================
@@ -532,9 +602,17 @@ def get_species_group_mapping() -> Dict[str, str]:
     }
 
 
+
+
 def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Voegt 'soortgroep' toe aan de dataset, exclusief de algemene groeivorm-codes.
+    Voegt soortgroep-kolommen toe aan de dataset, exclusief de algemene groeivorm-codes.
+
+    Belangrijk:
+    - 'soortgroep' behoudt het bestaande fallback-gedrag ('Overig / Individueel') voor compatibiliteit.
+    - 'soortgroep_weergave' toont expliciet 'Geen match' voor soorten zonder mapping,
+      zodat deze in grafieken en tellingen zichtbaar kunnen worden.
+    - 'soortgroep_match_status' geeft per record aan of er wel/geen mapping is gevonden.
     PERFORMANCE: vectorized i.p.v. df.apply(axis=1).
     """
     mapping = get_species_group_mapping()
@@ -550,48 +628,45 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     if df.empty:
         df["soortgroep"] = pd.Series(dtype="object")
+        df["soortgroep_weergave"] = pd.Series(dtype="object")
+        df["soortgroep_match_status"] = pd.Series(dtype="object")
         df["bedekkingsgraad_proc"] = pd.Series(dtype="float")
         return df
 
     soort = df["soort"].fillna("").astype(str).str.strip()
     genus = soort.str.split().str[0].fillna("")
-
     soortgroep = pd.Series("Overig / Individueel", index=df.index, dtype="object")
 
-    # Kenmerkende soorten o.b.v. Grootheid
     if "Grootheid" in df.columns:
         mask_aanw = df["Grootheid"].astype(str) == "AANWZHD"
         soortgroep.loc[mask_aanw] = "Kenmerkende soort (N2000)"
     else:
         mask_aanw = pd.Series(False, index=df.index)
 
-    # Directe mapping
     direct = soort.map(mapping)
     mask_direct = direct.notna() & (~mask_aanw)
     soortgroep.loc[mask_direct] = direct.loc[mask_direct].astype(str)
 
-    # Genus mapping (behalve Potamogeton)
     mask_need = (soortgroep == "Overig / Individueel") & (~mask_aanw)
     genus_map = genus.map(mapping)
     mask_genus = mask_need & (genus != "Potamogeton") & genus_map.notna()
     soortgroep.loc[mask_genus] = genus_map.loc[mask_genus].astype(str)
 
+    mask_match = mask_aanw | mask_direct | mask_genus
     df["soortgroep"] = soortgroep
+    df["soortgroep_match_status"] = np.where(mask_match, "Match", "Geen match")
+    df["soortgroep_weergave"] = np.where(mask_match, df["soortgroep"], "Geen match")
 
-    # Bedekkingsgraad numeriek
     target_col = "bedekking_pct"
     if target_col not in df.columns:
         target_col = "waarde_bedekking" if "waarde_bedekking" in df.columns else ("WaardeGemeten" if "WaardeGemeten" in df.columns else None)
-
     if target_col is None:
         df["bedekkingsgraad_proc"] = 0.0
     else:
         s = df[target_col].fillna(0).astype(str).str.replace(",", ".", regex=False)
         s = s.str.replace("<", "", regex=False).str.replace(">", "", regex=False).str.strip()
         df["bedekkingsgraad_proc"] = pd.to_numeric(s, errors="coerce").fillna(0.0).astype(float)
-
     return df
-
 
 def get_sorted_species_list(df: pd.DataFrame) -> list:
     """Gesorteerde lijst met individuele soorten (excl. verzamelcodes)."""
@@ -681,6 +756,52 @@ def load_species_lookup() -> pd.DataFrame:
 # =============================================================================
 # CORE LOAD_DATA (DuckDB + Parquet) met fallback
 # =============================================================================
+
+
+# =============================================================================
+# SCHEMA HARDENING / MATCH DISPLAY KOL0MMEN
+# =============================================================================
+def _ensure_match_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Zorg dat match-/weergavekolommen voor KRW en trofieniveau altijd aanwezig zijn.
+
+    Dit maakt de app robuust voor oudere cached parquet-bestanden en voorkomt KeyErrors
+    in pagina's die de nieuwe kolommen gebruiken.
+    """
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+
+    if "trofisch_niveau" not in df.columns:
+        df["trofisch_niveau"] = np.nan
+    if "trofisch_niveau_match_status" not in df.columns:
+        df["trofisch_niveau_match_status"] = np.where(
+            df["trofisch_niveau"].notna() & (df["trofisch_niveau"].astype(str).str.strip() != ""),
+            "Match",
+            "Geen match",
+        )
+    if "trofisch_niveau_weergave" not in df.columns:
+        df["trofisch_niveau_weergave"] = np.where(
+            df["trofisch_niveau_match_status"] == "Match",
+            df["trofisch_niveau"].astype(str),
+            "Geen match",
+        )
+
+    if "krw_score" not in df.columns:
+        df["krw_score"] = np.nan
+    if "krw_class" not in df.columns:
+        df["krw_class"] = pd.cut(
+            pd.to_numeric(df["krw_score"], errors="coerce"),
+            bins=[0, 2, 4, 5],
+            labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+            include_lowest=True,
+        )
+    if "krw_match_status" not in df.columns:
+        df["krw_match_status"] = np.where(pd.to_numeric(df["krw_score"], errors="coerce").notna(), "Match", "Geen match")
+    if "krw_class_weergave" not in df.columns:
+        df["krw_class_weergave"] = df["krw_class"].astype(object)
+        df.loc[df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
+
+    return df
 def _file_signature() -> Tuple[str, float, float, str]:
     """Cache key: pipeline versie + mtimes."""
     csv_path = Path(FILE_PATH)
@@ -708,6 +829,7 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
         if ok:
             df_final = _read_parquet_to_pandas(FINAL_PARQUET)
             if not df_final.empty:
+                df_final = _ensure_match_display_columns(df_final)
                 return df_final
 
     # 1) DuckDB pad
@@ -844,6 +966,16 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
                 )
                 final_df = final_df.merge(lookup, on="soort_norm", how="left")
                 final_df = final_df.rename(columns={"NL naam": "soort_triviaal", "Watertype": "trofisch_niveau"})
+                final_df["trofisch_niveau_match_status"] = np.where(
+                    final_df["trofisch_niveau"].notna() & (final_df["trofisch_niveau"].astype(str).str.strip() != ""),
+                    "Match",
+                    "Geen match",
+                )
+                final_df["trofisch_niveau_weergave"] = np.where(
+                    final_df["trofisch_niveau_match_status"] == "Match",
+                    final_df["trofisch_niveau"].astype(str),
+                    "Geen match",
+                )
 
                 # KRW score/class
                 final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
@@ -861,6 +993,9 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
                     labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
                     include_lowest=True,
                 )
+                final_df["krw_match_status"] = np.where(final_df["krw_score"].notna(), "Match", "Geen match")
+                final_df["krw_class_weergave"] = final_df["krw_class"].astype(object)
+                final_df.loc[final_df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
 
                 final_df["soort_display"] = np.where(
                     final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
@@ -873,7 +1008,8 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
                     "soort", "bedekking_pct", "waarde_bedekking", "totaal_bedekking_locatie",
                     "diepte_m", "doorzicht_m", "lat", "lon", "x_rd", "y_rd",
                     "groeivorm", "type", "Grootheid", "soort_triviaal", "trofisch_niveau",
-                    "krw_watertype", "krw_score", "krw_class", "soort_display"
+                    "trofisch_niveau_weergave", "trofisch_niveau_match_status",
+                    "krw_watertype", "krw_score", "krw_class", "krw_class_weergave", "krw_match_status", "soort_display"
                 ]
 
                 for col in cols_to_keep:
@@ -881,6 +1017,7 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
                         final_df[col] = np.nan
 
                 final_df = final_df[cols_to_keep]
+                final_df = _ensure_match_display_columns(final_df)
 
                 try:
                     _write_parquet_from_pandas(final_df, FINAL_PARQUET)
@@ -967,6 +1104,16 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
     )
     final_df = final_df.merge(lookup, on="soort_norm", how="left")
     final_df = final_df.rename(columns={"NL naam": "soort_triviaal", "Watertype": "trofisch_niveau"})
+    final_df["trofisch_niveau_match_status"] = np.where(
+        final_df["trofisch_niveau"].notna() & (final_df["trofisch_niveau"].astype(str).str.strip() != ""),
+        "Match",
+        "Geen match",
+    )
+    final_df["trofisch_niveau_weergave"] = np.where(
+        final_df["trofisch_niveau_match_status"] == "Match",
+        final_df["trofisch_niveau"].astype(str),
+        "Geen match",
+    )
 
     final_df["krw_watertype"] = final_df["Waterlichaam"].map(KRW_WATERTYPE_BY_WATERLICHAAM)
     final_df["krw_score"] = np.nan
@@ -980,6 +1127,9 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
         labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
         include_lowest=True,
     )
+    final_df["krw_match_status"] = np.where(final_df["krw_score"].notna(), "Match", "Geen match")
+    final_df["krw_class_weergave"] = final_df["krw_class"].astype(object)
+    final_df.loc[final_df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
     final_df["soort_display"] = np.where(
         final_df["soort_triviaal"].notna() & (final_df["soort_triviaal"].astype(str).str.len() > 0),
         final_df["soort_triviaal"] + " (" + final_df["soort"] + ")",
@@ -991,13 +1141,15 @@ def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
         "soort", "bedekking_pct", "waarde_bedekking", "totaal_bedekking_locatie",
         "diepte_m", "doorzicht_m", "lat", "lon", "x_rd", "y_rd",
         "groeivorm", "type", "Grootheid", "soort_triviaal", "trofisch_niveau",
-        "krw_watertype", "krw_score", "krw_class", "soort_display"
+        "trofisch_niveau_weergave", "trofisch_niveau_match_status",
+        "krw_watertype", "krw_score", "krw_class", "krw_class_weergave", "krw_match_status", "soort_display"
     ]
     for col in cols_to_keep:
         if col not in final_df.columns:
             final_df[col] = np.nan
 
     final_df = final_df[cols_to_keep]
+    final_df = _ensure_match_display_columns(final_df)
 
     try:
         _write_parquet_from_pandas(final_df, FINAL_PARQUET)
@@ -1291,9 +1443,11 @@ def create_pie_map(
     fixed_total=None,
     fill_gap=False,
     gap_color="transparent",
+    basemap: str = "default",
 ):
     """
     Folium kaart met pie-chart markers (SVG via DivIcon) per locatie.
+    basemap="bathymetry" gebruikt de RWS bathymetrie-WMS i.p.v. OSM.
     FIX: return pas na loop (anders slechts 1 marker).
     """
     if df_locs["lat"].isnull().all():
@@ -1301,7 +1455,7 @@ def create_pie_map(
     else:
         center_lat, center_lon = df_locs["lat"].mean(), df_locs["lon"].mean()
 
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_start, control_scale=True)
+    m = create_folium_base_map(center_lat, center_lon, zoom_start=zoom_start, control_scale=True, basemap=basemap)
 
     for row in df_locs.dropna(subset=["lat", "lon"]).itertuples():
         loc_id = getattr(row, "locatie_id")
@@ -1350,9 +1504,10 @@ def create_pie_map(
     return m
 
 
-def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation", category_col=None, category_color_map=None):
+def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation", category_col=None, category_color_map=None, basemap: str = "default"):
     """
-    Genereert een Folium kaart (OSM-tiles).
+    Genereert een Folium kaart.
+    basemap="default" behoudt OSM; basemap="bathymetry" gebruikt de RWS bathymetrie-WMS.
     FIX: return pas na loop (anders slechts 1 marker).
     """
     if dataframe["lat"].isnull().all():
@@ -1361,7 +1516,7 @@ def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation",
         center_lat = dataframe["lat"].mean()
         center_lon = dataframe["lon"].mean()
 
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=10, control_scale=True)
+    m = create_folium_base_map(center_lat, center_lon, zoom_start=10, control_scale=True, basemap=basemap)
 
     for row in dataframe.itertuples():
         radius = 5

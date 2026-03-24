@@ -13,6 +13,42 @@ st.markdown("Gemiddelden van geselecteerd meetjaar.")
 # -----------------------------------------------------------------------------
 RWS_GROEIVORM_CODES = ["FLAB", "KROOS", "SUBMSPTN", "DRAADAGN", "DRIJFBPTN", "EMSPTN", "WATPTN"]
 
+NO_MATCH_LABEL = "Geen match"
+KRW_COLOR_MAP = {
+    "Gunstig (1-2)": "#2ca02c",
+    "Neutraal (3-4)": "#ff7f0e",
+    "Ongewenst (5)": "#d62728",
+    NO_MATCH_LABEL: "#9e9e9e",
+}
+TROFIE_COLOR_MAP = {
+    "oligotroof": "#2ca02c",
+    "mesotroof": "#1f77b4",
+    "eutroof": "#ff7f0e",
+    "sterk eutroof": "#d62728",
+    "brak": "#ffd700",
+    "marien": "#8c510a",
+    "kroos": "#7f7f7f",
+    "Onbekend": "#999999",
+    NO_MATCH_LABEL: "#9e9e9e",
+}
+SOORTGROEP_COLOR_MAP = {
+    "chariden": "#1b9e77",
+    "iseotiden": "#7570b3",
+    "parvopotamiden": "#d95f02",
+    "magnopotamiden": "#66a61e",
+    "myriophylliden": "#e7298a",
+    "vallisneriiden": "#e6ab02",
+    "elodeiden": "#a6761d",
+    "stratiotiden": "#1f78b4",
+    "pepliden": "#b2df8a",
+    "batrachiiden": "#fb9a99",
+    "nymphaeiden": "#cab2d6",
+    "haptofyten": "#fdbf6f",
+    "Kenmerkende soort (N2000)": "#000000",
+    "Overig / Individueel": "#999999",
+    NO_MATCH_LABEL: "#9e9e9e",
+}
+
 # -----------------------------------------------------------------------------
 # CACHED HELPERS (sneller bij UI-wijzigingen)
 # -----------------------------------------------------------------------------
@@ -164,24 +200,22 @@ def _trend_speciesgroups_fraction(df_trend_base: pd.DataFrame) -> pd.DataFrame:
     return out
 
 @st.cache_data(show_spinner=False)
+
+
 def _speciesgroup_counts(df_individual_species: pd.DataFrame) -> pd.DataFrame:
     """
-    Verdeling waarnemingen per soortgroep (op basis van individuele soorten in df_individual_species).
-    Verwacht: kolommen 'soort' en (via utils) mapping naar 'soortgroep'.
+    Verdeling waarnemingen per soortgroep inclusief expliciete categorie 'Geen match'.
     """
     if df_individual_species.empty:
         return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
-
     df_mapped = add_species_group_columns(df_individual_species.copy())
-    if "soortgroep" not in df_mapped.columns:
+    if "soortgroep_weergave" in df_mapped.columns:
+        s = df_mapped["soortgroep_weergave"].fillna(NO_MATCH_LABEL)
+    elif "soortgroep" in df_mapped.columns:
+        s = df_mapped["soortgroep"].fillna(NO_MATCH_LABEL)
+    else:
         return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
-
-    s = df_mapped["soortgroep"].dropna()
-    if s.empty:
-        return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
-
-    out = s.value_counts().rename_axis("Soortgroep").reset_index(name="Aantal waarnemingen")
-    return out
+    return s.value_counts(dropna=False).rename_axis("Soortgroep").reset_index(name="Aantal waarnemingen")
 
 # -----------------------------------------------------------------------------
 # DATA LOAD
@@ -236,56 +270,64 @@ df_ind = df_year[(df_year["type"] == "Soort") & (~df_year["soort"].isin(RWS_GROE
 # >>> AANGEPAST: 3 kolommen i.p.v. 2
 c_pie1, c_pie2, c_pie3 = st.columns(3)
 
+
 with c_pie1:
     st.markdown("**Verdeling waarnemingen per KRW-score**")
-    if "krw_class" not in df_ind.columns and "krw_score" not in df_ind.columns:
-        st.info("KRW-score is nog niet beschikbaar in de dataset (controleer verrijking in utils.py).")
+    if "krw_class_weergave" in df_ind.columns:
+        s = df_ind["krw_class_weergave"].fillna(NO_MATCH_LABEL).astype(str)
+    elif "krw_score" in df_ind.columns:
+        s = pd.cut(
+            pd.to_numeric(df_ind["krw_score"], errors="coerce"),
+            bins=[0, 2, 4, 5],
+            labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+            include_lowest=True,
+        ).astype(object)
+        s = s.where(pd.Series(s).notna(), NO_MATCH_LABEL)
     else:
-        if "krw_class" in df_ind.columns:
-            s = df_ind["krw_class"].dropna()
-        else:
-            s = pd.cut(
-                df_ind["krw_score"],
-                bins=[0, 2, 4, 5],
-                labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
-                include_lowest=True,
-            ).dropna()
+        s = pd.Series(dtype="object")
 
-        if s.empty:
-            st.info("Geen KRW-scores beschikbaar voor de huidige selectie.")
-        else:
-            pie_df = s.value_counts().rename_axis("KRW-klasse").reset_index(name="Aantal waarnemingen")
-            color_map = {
-                "Gunstig (1-2)": "#2ca02c",
-                "Neutraal (3-4)": "#ff7f0e",
-                "Ongewenst (5)": "#d62728",
-            }
-            fig_krw = px.pie(
-                pie_df,
-                names="KRW-klasse",
-                values="Aantal waarnemingen",
-                color="KRW-klasse",
-                color_discrete_map=color_map,
-                hole=0.35,
-            )
-            fig_krw.update_traces(textposition="inside", textinfo="percent+label")
-            fig_krw.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig_krw, use_container_width=True)
+    if s.empty:
+        st.info("Geen KRW-scores beschikbaar voor de huidige selectie.")
+    else:
+        pie_df = s.value_counts(dropna=False).rename_axis("KRW-klasse").reset_index(name="Aantal waarnemingen")
+        fig_krw = px.pie(
+            pie_df,
+            names="KRW-klasse",
+            values="Aantal waarnemingen",
+            color="KRW-klasse",
+            color_discrete_map=KRW_COLOR_MAP,
+            hole=0.35,
+        )
+        fig_krw.update_traces(textposition="inside", textinfo="percent+label")
+        fig_krw.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_krw, width='stretch')
+        st.caption(f"Aantal zonder KRW-match: {int((s == NO_MATCH_LABEL).sum())}")
 
 with c_pie2:
     st.markdown("**Verdeling waarnemingen per trofieniveau**")
     if "trofisch_niveau" not in df_ind.columns:
         st.info("Trofieniveau is nog niet beschikbaar in de dataset (controleer verrijking in utils.py).")
     else:
-        t = df_ind["trofisch_niveau"].dropna()
+        if "trofisch_niveau_weergave" in df_ind.columns:
+            t = df_ind["trofisch_niveau_weergave"].fillna(NO_MATCH_LABEL).astype(str)
+        else:
+            t = df_ind["trofisch_niveau"].fillna(NO_MATCH_LABEL).astype(str)
         if t.empty:
             st.info("Geen trofieniveaus beschikbaar voor de huidige selectie.")
         else:
-            pie_df = t.value_counts().rename_axis("Trofieniveau").reset_index(name="Aantal waarnemingen")
-            fig_trofie = px.pie(pie_df, names="Trofieniveau", values="Aantal waarnemingen", hole=0.35)
+            pie_df = t.value_counts(dropna=False).rename_axis("Trofieniveau").reset_index(name="Aantal waarnemingen")
+            fig_trofie = px.pie(
+                pie_df,
+                names="Trofieniveau",
+                values="Aantal waarnemingen",
+                color="Trofieniveau",
+                color_discrete_map=TROFIE_COLOR_MAP,
+                hole=0.35,
+            )
             fig_trofie.update_traces(textposition="inside", textinfo="percent+label")
             fig_trofie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig_trofie, use_container_width=True)
+            st.plotly_chart(fig_trofie, width='stretch')
+            st.caption(f"Aantal zonder trofieniveau-match: {int((t == NO_MATCH_LABEL).sum())}")
 
     with st.expander("ℹ️ Toelichting"):
         st.markdown(
@@ -309,11 +351,14 @@ with c_pie3:
             names="Soortgroep",
             values="Aantal waarnemingen",
             hole=0.35,
-            color_discrete_sequence=px.colors.qualitative.Set3,
+            color="Soortgroep",
+            color_discrete_map=SOORTGROEP_COLOR_MAP,
         )
         fig_group.update_traces(textposition="inside", textinfo="percent+label")
         fig_group.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_group, use_container_width=True)
+        st.plotly_chart(fig_group, width='stretch')
+        no_match_count = int(pie_df.loc[pie_df["Soortgroep"] == NO_MATCH_LABEL, "Aantal waarnemingen"].sum())
+        st.caption(f"Aantal zonder soortgroep-match: {no_match_count}")
 
 # KPI-metrics (blijven gelijk)
 c1, c2, c3, c4 = st.columns(4)
@@ -339,7 +384,7 @@ if overview_df.empty:
 else:
     st.dataframe(
         overview_df[["Waterlichaam", "Bedekking (Totaal %)", "Gem. Doorzicht (m)", "Gem. Diepte (m)", "Soortenrijkdom"]],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "Bedekking (Totaal %)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),

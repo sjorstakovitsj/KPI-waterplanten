@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import html
 from streamlit_folium import st_folium
 
 from utils import (
@@ -12,6 +13,7 @@ from utils import (
     get_sorted_species_list,
     EXCLUDED_SPECIES_CODES,
     RWS_GROEIVORM_CODES,
+    build_bathymetry_legend_url,
 )
 
 st.set_page_config(layout="wide", page_title="Ruimtelijke analyse")
@@ -22,6 +24,127 @@ st.markdown("Vergelijk de vegetatieontwikkeling met diepte en doorzicht.")
 # CONSTANTS (consistent met UI-opties)
 # -----------------------------------------------------------------------------
 PIE_TYPES = ["KRW score", "Trofieniveau", "Groeivormen", "soortgroepen"]
+
+
+VEGETATION_LEGEND_ITEMS = [
+    ("0%", "#d73027"),
+    ("1–5%", "#fc8d59"),
+    ("6–15%", "#fee08b"),
+    ("16–40%", "#d9ef8b"),
+    ("41–75%", "#91cf60"),
+    ("> 75%", "#1a9850"),
+]
+GROEIVORM_COLOR_MAP = {
+    "Ondergedoken": "#2ca02c",
+    "Emergent": "#ffd700",
+    "Draadalgen": "#c2a5cf",
+    "Drijvend": "#ff7f0e",
+    "FLAB": "#d62728",
+    "Kroos": "#8c510a",
+}
+GROEIVORM_ORDER = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
+TROFIENIVEAU_COLOR_MAP = {"oligotroof": "#1b9e77","mesotroof": "#d95f02","eutroof": "#7570b3","sterk eutroof": "#e7298a","brak": "#66a61e","marien": "#e6ab02","kroos": "#a6761d","Onbekend": "#666666","Geen match": "#bbbbbb"}
+TROFIENIVEAU_ORDER = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend", "Geen match"]
+KRW_COLOR_MAP = {
+    "Gunstig (1-2)": "#2ca02c",
+    "Neutraal (3-4)": "#ff7f0e",
+    "Ongewenst (5)": "#d62728",
+    "Geen match": "#9e9e9e",
+}
+KRW_ORDER = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)", "Geen match"]
+SOORTGROEPEN_COLOR_MAP = {"chariden":"#1b9e77","iseotiden":"#d95f02","parvopotamiden":"#7570b3","magnopotamiden":"#e7298a","myriophylliden":"#66a61e","vallisneriiden":"#e6ab02","elodeiden":"#a6761d","stratiotiden":"#e6ab02","pepliden":"#1f78b4","batrachiiden":"#b2df8a","nymphaeiden":"#fb9a99","haptofyten":"#cab2d6","Kenmerkende soort (N2000)":"#000000","Overig / Individueel":"#FFD700","Geen match":"#bbbbbb"}
+SOORTGROEPEN_ORDER = [
+    "chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden",
+    "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden",
+    "nymphaeiden", "haptofyten", "Kenmerkende soort (N2000)", "Overig / Individueel", "Geen match",
+]
+
+
+def _render_html_legend(title: str, entries, note: str | None = None, columns: int = 3):
+    if not entries:
+        return
+
+    safe_columns = max(1, int(columns))
+    items_html = "".join(
+        (
+            f'<div style="display:flex; align-items:center; gap:0.5rem; min-width:0;">'
+            f'<span style="display:inline-block; width:16px; height:16px; border-radius:3px; '
+            f'border:1px solid #666; background:{color}; flex:0 0 16px;"></span>'
+            f'<span style="font-size:0.95rem; line-height:1.2;">{html.escape(str(label))}</span>'
+            f'</div>'
+        )
+        for label, color in entries
+    )
+
+    note_html = ""
+    if note:
+        note_html = (
+            f'<div style="margin-top:0.45rem; color:#666; font-size:0.85rem;">'
+            f'{html.escape(str(note))}'
+            f'</div>'
+        )
+
+    legend_html = (
+        f'<div style="margin:0.35rem 0 0.8rem 0; padding:0.8rem 0.95rem; '
+        f'border:1px solid #d9d9d9; border-radius:0.6rem; background:#fafafa;">'
+        f'<div style="font-weight:600; margin-bottom:0.55rem;">{html.escape(str(title))}</div>'
+        f'<div style="display:grid; grid-template-columns:repeat({safe_columns}, minmax(0, 1fr)); '
+        f'gap:0.45rem 0.9rem;">{items_html}</div>'
+        f'{note_html}'
+        f'</div>'
+    )
+
+    st.markdown(legend_html, unsafe_allow_html=True)
+
+
+def render_active_map_legend(layer_mode: str, analysis_level: str, selected_coverage_type: str):
+    if layer_mode != "Vegetatie":
+        return
+
+    if analysis_level == "individuele soorten":
+        _render_html_legend(
+            "Legenda vegetatiebedekking",
+            VEGETATION_LEGEND_ITEMS,
+            note="Zelfde kleurschaal als de markeringen op de kaart.",
+            columns=3,
+        )
+        return
+
+    if selected_coverage_type == "totale bedekking":
+        _render_html_legend(
+            "Legenda totale bedekking",
+            VEGETATION_LEGEND_ITEMS,
+            note="Zelfde kleurschaal als de kaartmarkeringen voor totale bedekking.",
+            columns=3,
+        )
+    elif selected_coverage_type == "Groeivormen":
+        _render_html_legend(
+            "Legenda groeivormen",
+            [(label, GROEIVORM_COLOR_MAP[label]) for label in GROEIVORM_ORDER],
+            note="De taartdiagrammen behouden de huidige opvulling; de kleuren hieronder tonen de categorieën in de kaart.",
+            columns=3,
+        )
+    elif selected_coverage_type == "Trofieniveau":
+        _render_html_legend(
+            "Legenda trofieniveau",
+            [(label, TROFIENIVEAU_COLOR_MAP[label]) for label in TROFIENIVEAU_ORDER],
+            note="Vaste kleurschakering voor trofieniveaus op de kaart.",
+            columns=3,
+        )
+    elif selected_coverage_type == "KRW score":
+        _render_html_legend(
+            "Legenda KRW-score",
+            [(label, KRW_COLOR_MAP[label]) for label in KRW_ORDER],
+            note="Vaste kleurschakering voor de KRW-score op de kaart.",
+            columns=3,
+        )
+    elif selected_coverage_type == "soortgroepen":
+        _render_html_legend(
+            "Legenda soortgroepen",
+            [(label, SOORTGROEPEN_COLOR_MAP[label]) for label in SOORTGROEPEN_ORDER],
+            note="De taartdiagrammen behouden de huidige opvulling; de kleuren hieronder tonen de soortgroepen in de kaart.",
+            columns=2,
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -100,6 +223,37 @@ def _safe_numeric(s: pd.Series, fallback: float = 0.0) -> pd.Series:
     return pd.to_numeric(s, errors="coerce").fillna(fallback)
 
 
+def _ensure_nomatch_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Maak ruimtelijke analyse robuust voor oudere datasets zonder display-kolommen."""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+
+    if "trofisch_niveau" not in df.columns:
+        df["trofisch_niveau"] = np.nan
+    if "trofisch_niveau_weergave" not in df.columns:
+        df["trofisch_niveau_weergave"] = np.where(
+            df["trofisch_niveau"].notna() & (df["trofisch_niveau"].astype(str).str.strip() != ""),
+            df["trofisch_niveau"].astype(str),
+            "Geen match",
+        )
+
+    if "krw_score" not in df.columns:
+        df["krw_score"] = np.nan
+    if "krw_class" not in df.columns:
+        df["krw_class"] = pd.cut(
+            pd.to_numeric(df["krw_score"], errors="coerce"),
+            bins=[0, 2, 4, 5],
+            labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+            include_lowest=True,
+        )
+    if "krw_class_weergave" not in df.columns:
+        df["krw_class_weergave"] = df["krw_class"].astype(object)
+        df.loc[df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
+
+    return df
+
+
 # -----------------------------------------------------------------------------
 # PRECOMPUTE: alles wat “intensief” is, 1x per filter-combinatie
 # -----------------------------------------------------------------------------
@@ -145,30 +299,38 @@ def _precompute_for_filter(df_filtered: pd.DataFrame, filter_key: tuple) -> dict
     counts_groeivormen = _pivot_to_counts_by_loc(pivot_groeivormen)
 
     # --- Species base (voor records: trofie / krw pies) ---
-    df_species_base = df_filtered[
-        (df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))
-    ][["locatie_id", "soort", "bedekking_pct", "krw_score", "krw_class", "trofisch_niveau"]].copy()
+    species_base_cols = ["locatie_id", "soort", "bedekking_pct", "krw_score", "krw_class", "krw_class_weergave", "trofisch_niveau", "trofisch_niveau_weergave"]
+    df_species_base = df_filtered[(df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(EXCLUDED_SPECIES_CODES))].copy()
+    for col in species_base_cols:
+        if col not in df_species_base.columns:
+            df_species_base[col] = np.nan
+    df_species_base = df_species_base[species_base_cols].copy()
 
     # Trofieniveau counts (records)
-    df_trof_counts = df_species_base.dropna(subset=["trofisch_niveau"])[["locatie_id", "trofisch_niveau"]]
+    trof_col = "trofisch_niveau_weergave" if "trofisch_niveau_weergave" in df_species_base.columns else "trofisch_niveau"
+    df_trof_counts = df_species_base[["locatie_id", trof_col]].copy()
+    df_trof_counts[trof_col] = df_trof_counts[trof_col].fillna("Geen match")
     if df_trof_counts.empty:
         counts_trof = {}
     else:
-        pivot_trof = df_trof_counts.groupby(["locatie_id", "trofisch_niveau"]).size().unstack(fill_value=0)
+        pivot_trof = df_trof_counts.groupby(["locatie_id", trof_col]).size().unstack(fill_value=0)
         counts_trof = _pivot_to_counts_by_loc(pivot_trof)
 
     # KRW counts (records)
     df_krw_counts = df_species_base.copy()
-    if "krw_class" in df_krw_counts.columns and df_krw_counts["krw_class"].notna().any():
-        df_krw_counts["krw_cat"] = df_krw_counts["krw_class"]
+    if "krw_class_weergave" in df_krw_counts.columns:
+        df_krw_counts["krw_cat"] = df_krw_counts["krw_class_weergave"].fillna("Geen match")
+    elif "krw_class" in df_krw_counts.columns and df_krw_counts["krw_class"].notna().any():
+        df_krw_counts["krw_cat"] = df_krw_counts["krw_class"].astype(object).where(df_krw_counts["krw_class"].notna(), "Geen match")
     else:
         df_krw_counts["krw_cat"] = pd.cut(
             _safe_numeric(df_krw_counts["krw_score"], np.nan),
             bins=[0, 2, 4, 5],
             labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
             include_lowest=True,
-        )
-    df_krw_counts = df_krw_counts.dropna(subset=["krw_cat"])[["locatie_id", "krw_cat"]]
+        ).astype(object)
+        df_krw_counts.loc[df_krw_counts["krw_cat"].isna(), "krw_cat"] = "Geen match"
+    df_krw_counts = df_krw_counts[["locatie_id", "krw_cat"]]
     if df_krw_counts.empty:
         counts_krw = {}
     else:
@@ -178,15 +340,17 @@ def _precompute_for_filter(df_filtered: pd.DataFrame, filter_key: tuple) -> dict
     # --- Extra kolommen voor tabel: KRW score loc (weighted), trofie dominant loc ---
     df_species_for_loc = df_filtered[
         (df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(RWS_GROEIVORM_CODES))
-    ][["locatie_id", "krw_score", "trofisch_niveau", "bedekking_pct"]].copy()
+    ][["locatie_id", "krw_score", "trofisch_niveau", "trofisch_niveau_weergave", "bedekking_pct"]].copy()
 
     # gewogen krw
     df_krw_loc = df_species_for_loc.dropna(subset=["krw_score"])
     krw_loc = _weighted_mean(df_krw_loc, "locatie_id", "krw_score", "bedekking_pct", "krw_score_loc")
 
     # dominant trofie
-    df_trof_loc = df_species_for_loc.dropna(subset=["trofisch_niveau"])
-    trof_loc = _dominant_category(df_trof_loc, "locatie_id", "trofisch_niveau", "bedekking_pct", "trofieniveau_loc")
+    trof_loc_col = "trofisch_niveau_weergave" if "trofisch_niveau_weergave" in df_species_for_loc.columns else "trofisch_niveau"
+    df_species_for_loc[trof_loc_col] = df_species_for_loc[trof_loc_col].fillna("Geen match")
+    df_trof_loc = df_species_for_loc.dropna(subset=[trof_loc_col])
+    trof_loc = _dominant_category(df_trof_loc, "locatie_id", trof_loc_col, "bedekking_pct", "trofieniveau_loc")
 
     # --- Soortgroepen (heavy) ---
     # reduce before mapping: keep only relevant columns for add_species_group_columns
@@ -198,7 +362,7 @@ def _precompute_for_filter(df_filtered: pd.DataFrame, filter_key: tuple) -> dict
     df_species_groups["bedekking_num"] = _safe_numeric(df_species_groups["bedekkingsgraad_proc"], 0.0).clip(lower=0.0)
 
     pivot_soortgroepen = (
-        df_species_groups.groupby(["locatie_id", "soortgroep"])["bedekking_num"]
+        df_species_groups.groupby(["locatie_id", "soortgroep_weergave" if "soortgroep_weergave" in df_species_groups.columns else "soortgroep"])["bedekking_num"]
         .sum()
         .unstack(fill_value=0.0)
     )
@@ -225,6 +389,7 @@ def _precompute_for_filter(df_filtered: pd.DataFrame, filter_key: tuple) -> dict
 # DATA LOAD + FILTERS
 # -----------------------------------------------------------------------------
 df = load_data()
+df = _ensure_nomatch_display_columns(df)
 
 st.sidebar.header("Filters")
 if df.empty:
@@ -242,6 +407,7 @@ selected_projects = st.sidebar.multiselect(
 )
 
 df_filtered = df[(df["jaar"] == selected_year) & (df["Project"].isin(selected_projects))].copy()
+df_filtered = _ensure_nomatch_display_columns(df_filtered)
 if df_filtered.empty:
     st.warning("Geen data gevonden voor deze selectie.")
     st.stop()
@@ -322,9 +488,7 @@ if layer_mode == "Vegetatie":
         st.info(f"Je bekijkt de verspreiding van de soort: **{selected_coverage_type}**")
     elif selected_coverage_type != "totale bedekking":
         st.info(f"Je bekijkt de verspreiding van de groep: **{selected_coverage_type}**")
-
-if layer_mode == "Vegetatie":
-    st.caption("Legenda: Rood (0%) → Geel → Donkergroen (Hoge bedekking)")
+    render_active_map_legend(layer_mode, analysis_level, selected_coverage_type)
 elif layer_mode == "Diepte":
     st.caption("Legenda: Lichtblauw (Ondiep) → Donkerblauw (Diep)")
 else:
@@ -340,7 +504,7 @@ if layer_mode in ["Diepte", "Doorzicht"]:
     df_map_data = df_locs.copy()
     if "waarde_veg" not in df_map_data.columns:
         df_map_data["waarde_veg"] = 0.0
-    map_obj = create_map(df_map_data, layer_mode, label_veg=selected_coverage_type)
+    map_obj = create_map(df_map_data, layer_mode, label_veg=selected_coverage_type, basemap="bathymetry")
 
 else:
     # Vegetatie mode
@@ -351,15 +515,8 @@ else:
         if selected_coverage_type == "Groeivormen":
             counts_by_loc = precomp["counts_groeivormen"]
 
-            color_map = {
-                "Ondergedoken": "#2ca02c",
-                "Emergent": "#ffd700",
-                "Draadalgen": "#c2a5cf",
-                "Drijvend": "#ff7f0e",
-                "FLAB": "#d62728",
-                "Kroos": "#8c510a",
-            }
-            order = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
+            color_map = GROEIVORM_COLOR_MAP
+            order = GROEIVORM_ORDER
 
             map_obj = create_pie_map(
                 df_locs_for_map,
@@ -372,22 +529,14 @@ else:
                 fixed_total=100,
                 fill_gap=True,
                 gap_color="transparent",
+                basemap="bathymetry",
             )
 
         elif selected_coverage_type == "Trofieniveau":
             counts_by_loc = precomp["counts_trof"]
 
-            color_map = {
-                "oligotroof": "#2ca02c",
-                "mesotroof": "#1f77b4",
-                "eutroof": "#ff7f0e",
-                "sterk eutroof": "#d62728",
-                "brak": "#ffd700",
-                "marien": "#8c510a",
-                "kroos": "#7f7f7f",
-                "Onbekend": "#999999",
-            }
-            order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend"]
+            color_map = TROFIENIVEAU_COLOR_MAP
+            order = TROFIENIVEAU_ORDER
 
             map_obj = create_pie_map(
                 df_locs_for_map,
@@ -397,17 +546,14 @@ else:
                 order=order,
                 size_px=30,
                 zoom_start=10,
+                basemap="bathymetry",
             )
 
         elif selected_coverage_type == "KRW score":
             counts_by_loc = precomp["counts_krw"]
 
-            color_map = {
-                "Gunstig (1-2)": "#2ca02c",
-                "Neutraal (3-4)": "#ff7f0e",
-                "Ongewenst (5)": "#d62728",
-            }
-            order = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"]
+            color_map = KRW_COLOR_MAP
+            order = KRW_ORDER
 
             map_obj = create_pie_map(
                 df_locs_for_map,
@@ -417,32 +563,14 @@ else:
                 order=order,
                 size_px=30,
                 zoom_start=10,
+                basemap="bathymetry",
             )
 
         else:  # soortgroepen
             counts_by_loc = precomp["counts_soortgroepen"]
 
-            color_map = {
-                "chariden": "#1b9e77",
-                "iseotiden": "#7570b3",
-                "parvopotamiden": "#d95f02",
-                "magnopotamiden": "#66a61e",
-                "myriophylliden": "#e7298a",
-                "vallisneriiden": "#e6ab02",
-                "elodeiden": "#a6761d",
-                "stratiotiden": "#1f78b4",
-                "pepliden": "#b2df8a",
-                "batrachiiden": "#fb9a99",
-                "nymphaeiden": "#cab2d6",
-                "haptofyten": "#fdbf6f",
-                "Kenmerkende soort (N2000)": "#000000",
-                "Overig / Individueel": "#999999",
-            }
-            order = [
-                "chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden",
-                "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden",
-                "nymphaeiden", "haptofyten", "Kenmerkende soort (N2000)", "Overig / Individueel"
-            ]
+            color_map = SOORTGROEPEN_COLOR_MAP
+            order = SOORTGROEPEN_ORDER
 
             map_obj = create_pie_map(
                 df_locs_for_map,
@@ -455,6 +583,7 @@ else:
                 fixed_total=100,
                 fill_gap=True,
                 gap_color="transparent",
+                basemap="bathymetry",
             )
 
     else:
@@ -470,7 +599,7 @@ else:
             )
             df_map_data = df_map_data.merge(df_veg, on="locatie_id", how="left")
             df_map_data["waarde_veg"] = _safe_numeric(df_map_data["waarde_veg"], 0.0)
-            map_obj = create_map(df_map_data, "Vegetatie", label_veg=selected_coverage_type)
+            map_obj = create_map(df_map_data, "Vegetatie", label_veg=selected_coverage_type, basemap="bathymetry")
 
         else:
             if selected_coverage_type == "totale bedekking":
@@ -481,7 +610,7 @@ else:
                 )
                 df_map_data = df_map_data.merge(df_veg, on="locatie_id", how="left")
                 df_map_data["waarde_veg"] = _safe_numeric(df_map_data["waarde_veg"], 0.0)
-                map_obj = create_map(df_map_data, "Vegetatie", label_veg="totale bedekking")
+                map_obj = create_map(df_map_data, "Vegetatie", label_veg="totale bedekking", basemap="bathymetry")
 
             elif selected_coverage_type == "KRW score":
                 # Weighted KRW per locatie: uit precomp als die er is, anders snel berekenen
@@ -496,7 +625,7 @@ else:
 
                 df_map_data = df_map_data.merge(df_veg, on="locatie_id", how="left")
                 df_map_data["waarde_veg"] = _safe_numeric(df_map_data["waarde_veg"], 0.0)
-                map_obj = create_map(df_map_data, "Vegetatie", label_veg="KRW score", value_style="krw")
+                map_obj = create_map(df_map_data, "Vegetatie", label_veg="KRW score", value_style="krw", basemap="bathymetry")
 
             elif selected_coverage_type == "Trofieniveau":
                 # Dominant trofie per locatie (categorisch) uit precomp
@@ -534,10 +663,18 @@ else:
             else:
                 # fallback
                 df_map_data["waarde_veg"] = 0.0
-                map_obj = create_map(df_map_data, "Vegetatie", label_veg=selected_coverage_type)
+                map_obj = create_map(df_map_data, "Vegetatie", label_veg=selected_coverage_type, basemap="bathymetry")
 
 # Render map
 st_folium(map_obj, height=600, width=None)
+
+legend_url = build_bathymetry_legend_url()
+with st.expander("Legenda bathymetrie", expanded=False):
+    st.markdown(
+        f'<img src="{legend_url}" alt="Legenda bathymetrie" style="max-width:360px; width:100%; height:auto;"/>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Legenda uit de WMS-kaartservice van Rijkswaterstaat.")
 
 # -----------------------------------------------------------------------------
 # Toelichting Trofieniveau
@@ -571,7 +708,7 @@ with st.expander(f"Toon data voor {selected_coverage_type}"):
         # light compute (zonder soortgroepen mapping)
         df_species_for_loc = df_filtered[
             (df_filtered["type"] == "Soort") & (~df_filtered["soort"].isin(RWS_GROEIVORM_CODES))
-        ][["locatie_id", "krw_score", "trofisch_niveau", "bedekking_pct"]].copy()
+        ][["locatie_id", "krw_score", "trofisch_niveau", "trofisch_niveau_weergave", "bedekking_pct"]].copy()
 
         krw_loc = _weighted_mean(df_species_for_loc.dropna(subset=["krw_score"]), "locatie_id", "krw_score", "bedekking_pct", "krw_score_loc")
         trof_loc = _dominant_category(df_species_for_loc.dropna(subset=["trofisch_niveau"]), "locatie_id", "trofisch_niveau", "bedekking_pct", "trofieniveau_loc")
@@ -599,7 +736,7 @@ with st.expander(f"Toon data voor {selected_coverage_type}"):
 
     st.dataframe(
         df_display[cols],
-        use_container_width=True,
+        width='stretch',
         column_config={
             "waarde_veg": waarde_cfg,
             "krw_score_loc": st.column_config.NumberColumn("KRW score (locatie)", format="%.2f"),

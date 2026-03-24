@@ -109,7 +109,7 @@ with c1:
             },
         )
         fig_area.update_layout(yaxis_title="Bedekking (%)", xaxis_title="Jaar", height=400)
-        st.plotly_chart(fig_area, use_container_width=True)
+        st.plotly_chart(fig_area, width='stretch')
 
 with c2:
     st.subheader(f"Profiel {selected_year}")
@@ -236,7 +236,7 @@ with c2:
             height=400,
             margin=dict(l=40, r=40, t=20, b=20),
         )
-        st.plotly_chart(fig_radar, use_container_width=True)
+        st.plotly_chart(fig_radar, width='stretch')
     else:
         st.info(f"Geen data beschikbaar voor radarplot in {selected_year}")
 
@@ -326,7 +326,7 @@ else:
         height=500,
     )
     fig_stack.update_layout(yaxis=dict(range=[0, 1]))
-    st.plotly_chart(fig_stack, use_container_width=True)
+    st.plotly_chart(fig_stack, width='stretch')
 
     with st.expander("🔍 Analyse 'overig / individueel' (soorten die nog niet zijn ingedeeld)"):
         df_overig = df_species_mapped[df_species_mapped["soortgroep"] == "Overig / Individueel"]
@@ -339,7 +339,7 @@ else:
                 )
                 .sort_values("Max_Bedekking", ascending=False)
             )
-            st.dataframe(missing_stats, use_container_width=True)
+            st.dataframe(missing_stats, width='stretch')
         else:
             st.success("Alle aangetroffen soorten zijn succesvol ingedeeld in een groep!")
 

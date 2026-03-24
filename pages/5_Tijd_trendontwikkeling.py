@@ -495,7 +495,7 @@ else:
         },
     )
     fig_cover.update_layout(height=380, legend=dict(orientation="h", y=-0.25))
-    st.plotly_chart(fig_cover, use_container_width=True)
+    st.plotly_chart(fig_cover, width='stretch')
 
 
 
@@ -515,7 +515,7 @@ fig_line = px.line(
     markers=True,
     title="Trendontwikkeling per meetpunt in geselecteerde wateren",
 )
-st.plotly_chart(fig_line, use_container_width=True)
+st.plotly_chart(fig_line, width='stretch')
 
 # -------------------------------------------------------------
 # 2) Regressieanalyse – verbetert of verslechtert de toestand?
@@ -571,7 +571,7 @@ if not df_slopes.empty:
                 "Stabiel ➡️": "grey",
             },
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
     with col2:
         st.write(f"**Detailtabel (meetlocaties met ≥ {MIN_JAREN} jaar data)**")
@@ -579,7 +579,7 @@ if not df_slopes.empty:
             df_slopes.sort_values("slope", ascending=False)
             .style.background_gradient(subset=["slope"], cmap="RdYlGn")
             .format({"slope": "{:.4f}", "n_jaren": "{:.0f}"}),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 else:
@@ -633,7 +633,7 @@ if len(available_years) >= 2:
         title=f"Vergelijking {year_start} vs {year_end} per locatie",
         labels={"waarde": selected_metric_label, "color": "Jaar"},
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width='stretch')
 else:
     st.info("Niet genoeg jaren aan data voor een vergelijking.")
 
@@ -744,4 +744,4 @@ else:
         )
 
         fig_heat.update_layout(height=1200, yaxis=dict(side="left"))
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat, width='stretch')
