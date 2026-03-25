@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-
 from utils import load_data, add_species_group_columns
 
 st.set_page_config(layout="wide")
@@ -19,6 +18,7 @@ def _filter_base(df: pd.DataFrame, projects: tuple, bodies: tuple) -> pd.DataFra
     out = out[out["Waterlichaam"].isin(bodies)]
     return out.copy()
 
+
 @st.cache_data(show_spinner=False)
 def _species_only(df_base: pd.DataFrame) -> pd.DataFrame:
     """Alleen type=Soort + numeric kolommen alvast casten voor snellere aggregaties."""
@@ -28,6 +28,7 @@ def _species_only(df_base: pd.DataFrame) -> pd.DataFrame:
         if col in df_s.columns:
             df_s[col] = pd.to_numeric(df_s[col], errors="coerce")
     return df_s
+
 
 @st.cache_data(show_spinner=False)
 def _bubble_yearly(df_species: pd.DataFrame) -> pd.DataFrame:
@@ -47,6 +48,7 @@ def _bubble_yearly(df_species: pd.DataFrame) -> pd.DataFrame:
         )
     )
     return df_bubble
+
 
 @st.cache_data(show_spinner=False)
 def _bubble_period_means(df_bubble: pd.DataFrame, year_min: int, year_max: int) -> pd.DataFrame:
@@ -81,8 +83,44 @@ def _bubble_period_means(df_bubble: pd.DataFrame, year_min: int, year_max: int) 
     # bubble-size fix (Plotly: size > 0)
     df_plot["diepte_m"] = df_plot["diepte_m"].fillna(0.1)
     df_plot.loc[df_plot["diepte_m"] <= 0, "diepte_m"] = 0.1
-
     return df_plot
+
+
+@st.cache_data(show_spinner=False)
+def _ensure_nomatch_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Maak ecologische indices robuust voor datasets zonder display-kolommen voor no-matchs."""
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    if "trofisch_niveau" not in df.columns:
+        df["trofisch_niveau"] = np.nan
+
+    if "trofisch_niveau_weergave" not in df.columns:
+        df["trofisch_niveau_weergave"] = np.where(
+            df["trofisch_niveau"].notna() & (df["trofisch_niveau"].astype(str).str.strip() != ""),
+            df["trofisch_niveau"].astype(str),
+            "Geen match",
+        )
+
+    if "krw_score" not in df.columns:
+        df["krw_score"] = np.nan
+
+    if "krw_class" not in df.columns:
+        df["krw_class"] = pd.cut(
+            pd.to_numeric(df["krw_score"], errors="coerce"),
+            bins=[0, 2, 4, 5],
+            labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
+            include_lowest=True,
+        )
+
+    if "krw_class_weergave" not in df.columns:
+        df["krw_class_weergave"] = df["krw_class"].astype(object)
+        df.loc[df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
+
+    return df
+
 
 @st.cache_data(show_spinner=False)
 def _heatmap_matrix(
@@ -96,6 +134,10 @@ def _heatmap_matrix(
     - Records (count)
     - Bedekking-gewogen (sum)
     - Normaliseren per jaar naar 100%
+
+    Inclusief soorten zonder match voor trofieniveau, soortgroep en KRW score,
+    conform de ruimtelijke analyse.
+
     Retourneert: (matrix, category_column_name, value_label)
     """
     if df_base.empty:
@@ -104,6 +146,8 @@ def _heatmap_matrix(
     # brondata per param
     if heatmap_param == "Groeivormen":
         df_h = df_base[df_base["type"] == "Groep"].copy()
+        if "groeivorm" not in df_h.columns:
+            df_h["groeivorm"] = np.nan
         df_h = df_h.dropna(subset=["groeivorm", "jaar"])
         cat_col = "groeivorm"
         df_h["bedekking_num"] = pd.to_numeric(df_h["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
@@ -114,18 +158,37 @@ def _heatmap_matrix(
         if "Grootheid" in df_species.columns:
             df_species = df_species[df_species["Grootheid"] == "BEDKG"].copy()
 
-        # zwaar: mapping -> alleen uitvoeren in dit pad, en cache via deze functie
+        # mapping behouden, maar no-matchs expliciet zichtbaar maken
         df_h = add_species_group_columns(df_species)
-        df_h = df_h.dropna(subset=["soortgroep", "jaar"])
-        cat_col = "soortgroep"
-        df_h["bedekking_num"] = pd.to_numeric(df_h["bedekkingsgraad_proc"], errors="coerce").fillna(0).clip(lower=0)
+        if "soortgroep_weergave" in df_h.columns:
+            df_h["soortgroep_cat"] = df_h["soortgroep_weergave"].astype(object)
+            df_h.loc[df_h["soortgroep_cat"].isna() | (df_h["soortgroep_cat"].astype(str).str.strip() == ""), "soortgroep_cat"] = "Geen match"
+        else:
+            if "soortgroep" not in df_h.columns:
+                df_h["soortgroep"] = np.nan
+            df_h["soortgroep_cat"] = df_h["soortgroep"].astype(object)
+            df_h.loc[df_h["soortgroep_cat"].isna() | (df_h["soortgroep_cat"].astype(str).str.strip() == ""), "soortgroep_cat"] = "Geen match"
+
+        df_h = df_h.dropna(subset=["jaar"])
+        cat_col = "soortgroep_cat"
+        bedekking_source = "bedekkingsgraad_proc" if "bedekkingsgraad_proc" in df_h.columns else "bedekking_pct"
+        df_h["bedekking_num"] = pd.to_numeric(df_h[bedekking_source], errors="coerce").fillna(0).clip(lower=0)
 
     elif heatmap_param == "Trofieniveau":
         df_h = df_base[df_base["type"] == "Soort"].copy()
         if "Grootheid" in df_h.columns:
             df_h = df_h[df_h["Grootheid"] == "BEDKG"].copy()
-        df_h = df_h.dropna(subset=["trofisch_niveau", "jaar"])
-        cat_col = "trofisch_niveau"
+
+        if "trofisch_niveau_weergave" in df_h.columns:
+            df_h["trofie_cat"] = df_h["trofisch_niveau_weergave"].astype(object)
+        else:
+            if "trofisch_niveau" not in df_h.columns:
+                df_h["trofisch_niveau"] = np.nan
+            df_h["trofie_cat"] = df_h["trofisch_niveau"].astype(object)
+
+        df_h.loc[df_h["trofie_cat"].isna() | (df_h["trofie_cat"].astype(str).str.strip() == ""), "trofie_cat"] = "Geen match"
+        df_h = df_h.dropna(subset=["jaar"])
+        cat_col = "trofie_cat"
         df_h["bedekking_num"] = pd.to_numeric(df_h["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
 
     else:  # "KRW score"
@@ -133,16 +196,22 @@ def _heatmap_matrix(
         if "Grootheid" in df_h.columns:
             df_h = df_h[df_h["Grootheid"] == "BEDKG"].copy()
 
-        if "krw_class" in df_h.columns and df_h["krw_class"].notna().any():
-            df_h["krw_cat"] = df_h["krw_class"]
+        if "krw_class_weergave" in df_h.columns:
+            df_h["krw_cat"] = df_h["krw_class_weergave"].astype(object)
+            df_h.loc[df_h["krw_cat"].isna() | (df_h["krw_cat"].astype(str).str.strip() == ""), "krw_cat"] = "Geen match"
+        elif "krw_class" in df_h.columns and df_h["krw_class"].notna().any():
+            df_h["krw_cat"] = df_h["krw_class"].astype(object)
+            df_h.loc[df_h["krw_cat"].isna() | (df_h["krw_cat"].astype(str).str.strip() == ""), "krw_cat"] = "Geen match"
         else:
             df_h["krw_cat"] = pd.cut(
                 pd.to_numeric(df_h.get("krw_score"), errors="coerce"),
                 bins=[0, 2, 4, 5],
                 labels=["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"],
                 include_lowest=True,
-            )
-        df_h = df_h.dropna(subset=["krw_cat", "jaar"])
+            ).astype(object)
+            df_h.loc[df_h["krw_cat"].isna(), "krw_cat"] = "Geen match"
+
+        df_h = df_h.dropna(subset=["jaar"])
         cat_col = "krw_cat"
         df_h["bedekking_num"] = pd.to_numeric(df_h["bedekking_pct"], errors="coerce").fillna(0).clip(lower=0)
 
@@ -164,19 +233,28 @@ def _heatmap_matrix(
         col_sums = heat.sum(axis=0).replace(0, np.nan)
         heat = heat.div(col_sums, axis=1).fillna(0) * 100
 
-    # optionele ordering voor bekende categorieën (zoals in je oude code)
+    # optionele ordering voor bekende categorieën (zoals in je oude code + ruimtelijke analyse)
     if heatmap_param == "KRW score":
-        order = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)"]
-        heat = heat.reindex([x for x in order if x in heat.index])
-
-    elif heatmap_param == "Trofieniveau":
-        order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos"]
+        order = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)", "Geen match"]
         keep = [x for x in order if x in heat.index]
         rest = [x for x in heat.index if x not in keep]
         heat = heat.reindex(keep + rest)
-
+    elif heatmap_param == "Trofieniveau":
+        order = ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend", "Geen match"]
+        keep = [x for x in order if x in heat.index]
+        rest = [x for x in heat.index if x not in keep]
+        heat = heat.reindex(keep + rest)
     elif heatmap_param == "Groeivormen":
         order = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
+        keep = [x for x in order if x in heat.index]
+        rest = [x for x in heat.index if x not in keep]
+        heat = heat.reindex(keep + rest)
+    elif heatmap_param == "Soortgroepen":
+        order = [
+            "chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden",
+            "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden",
+            "nymphaeiden", "haptofyten", "Kenmerkende soort (N2000)", "Overig / Individueel", "Geen match",
+        ]
         keep = [x for x in order if x in heat.index]
         rest = [x for x in heat.index if x not in keep]
         heat = heat.reindex(keep + rest)
@@ -192,9 +270,11 @@ if df.empty:
     st.error("Geen data geladen.")
     st.stop()
 
+# Zorg dat no-match display-kolommen aanwezig zijn (zelfde principe als 2_Ruimtelijke_analyse.py)
+df = _ensure_nomatch_display_columns(df)
+
 # --- SIDEBAR FILTERS ---
 st.sidebar.header("Selectie filters")
-
 all_projects = sorted(df["Project"].dropna().unique())
 selected_projects = st.sidebar.multiselect(
     "Selecteer project(en)",
@@ -219,7 +299,6 @@ df_species_only = _species_only(df_filtered_base)
 # BUBBLE PLOT
 # -----------------------------------------------------------------------------
 st.subheader("Relatie doorzicht vs bedekking")
-
 with st.expander("ℹ️ Hoe komt deze bubble plot tot stand? (toelichting)"):
     st.markdown(
         """
@@ -244,7 +323,6 @@ De gekozen periode wordt gefilterd en daarna wordt per soort het gemiddelde geno
     )
 
 df_bubble = _bubble_yearly(df_species_only)
-
 if df_bubble.empty or df_bubble["jaar"].dropna().empty:
     st.warning("Geen data beschikbaar voor bubbleplot na filtering.")
 else:
@@ -312,14 +390,12 @@ else:
             annotation_text="Streef 0.8",
             annotation_position="top left",
         )
-
         st.plotly_chart(fig_bubble, width='stretch')
 
 # -----------------------------------------------------------------------------
 # HEATMAP
 # -----------------------------------------------------------------------------
 st.subheader("📊 Verdeling per jaar (heatmap)")
-
 with st.expander("ℹ️ Uitleg: hoe wordt deze heatmap berekend?", expanded=False):
     st.markdown(
         """
@@ -332,7 +408,10 @@ De heatmap toont per **jaar** hoe de **verdeling** eruitziet van een gekozen par
 Je kunt kiezen:
 - **Records** (aantal regels)
 - **Bedekking-gewogen** (som van bedekking)
+
 En optioneel normaliseren per jaar (0–100% verdeling).
+
+Voor **Trofieniveau**, **Soortgroepen** en **KRW score** worden ook records zonder match expliciet getoond als **Geen match**.
 """
     )
 
