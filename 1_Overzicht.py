@@ -44,7 +44,6 @@ SOORTGROEP_COLOR_MAP = {
     "batrachiiden": "#fb9a99",
     "nymphaeiden": "#cab2d6",
     "haptofyten": "#fdbf6f",
-    "Kenmerkende soort (N2000)": "#000000",
     "Overig / Individueel": "#999999",
     NO_MATCH_LABEL: "#9e9e9e",
 }
@@ -205,18 +204,87 @@ def _trend_speciesgroups_fraction(df_trend_base: pd.DataFrame) -> pd.DataFrame:
 def _speciesgroup_counts(df_individual_species: pd.DataFrame) -> pd.DataFrame:
     """
     Verdeling waarnemingen per soortgroep inclusief expliciete categorie 'Geen match'.
+    Kenmerkende soorten (N2000) worden hier expliciet buiten gehouden, omdat dit
+    een aparte entiteit is.
     """
     if df_individual_species.empty:
         return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
     df_mapped = add_species_group_columns(df_individual_species.copy())
+    if "is_kenmerkende_soort_n2000" in df_mapped.columns:
+        df_mapped = df_mapped[~df_mapped["is_kenmerkende_soort_n2000"].fillna(False)].copy()
+    if df_mapped.empty:
+        return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
     if "soortgroep_weergave" in df_mapped.columns:
         s = df_mapped["soortgroep_weergave"].fillna(NO_MATCH_LABEL)
     elif "soortgroep" in df_mapped.columns:
         s = df_mapped["soortgroep"].fillna(NO_MATCH_LABEL)
     else:
         return pd.DataFrame(columns=["Soortgroep", "Aantal waarnemingen"])
+
     return s.value_counts(dropna=False).rename_axis("Soortgroep").reset_index(name="Aantal waarnemingen")
 
+
+@st.cache_data(show_spinner=False)
+def _n2000_counts(df_individual_species: pd.DataFrame) -> pd.DataFrame:
+    """
+    Verdeling waarnemingen van Kenmerkende soorten (N2000), weergegeven per soort.
+    In het diagram wordt alleen de triviale naam getoond, terwijl de legenda de
+    notatie 'Triviale naam (Wetenschappelijke naam)' behoudt.
+    """
+    empty_cols = ["Kenmerkende soort (N2000)", "Label kort", "Aantal waarnemingen"]
+    if df_individual_species.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    df_mapped = add_species_group_columns(df_individual_species.copy())
+    if "is_kenmerkende_soort_n2000" not in df_mapped.columns:
+        return pd.DataFrame(columns=empty_cols)
+
+    df_n2000 = df_mapped[df_mapped["is_kenmerkende_soort_n2000"].fillna(False)].copy()
+    if df_n2000.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    if "kenmerkende_soort_n2000_weergave" in df_n2000.columns:
+        full_label = df_n2000["kenmerkende_soort_n2000_weergave"].fillna(NO_MATCH_LABEL).astype(str).str.strip()
+    elif "soort_display" in df_n2000.columns:
+        full_label = df_n2000["soort_display"].fillna(NO_MATCH_LABEL).astype(str).str.strip()
+    else:
+        full_label = df_n2000["soort"].fillna(NO_MATCH_LABEL).astype(str).str.strip()
+
+    if "soort_triviaal" in df_n2000.columns:
+        short_label = df_n2000["soort_triviaal"].fillna("").astype(str).str.strip()
+    else:
+        short_label = pd.Series("", index=df_n2000.index, dtype="object")
+
+    short_label = short_label.where(
+        short_label != "",
+        full_label.str.replace(r"\s*\([^)]*\)\s*$", "", regex=True).str.strip(),
+    )
+
+    out = pd.DataFrame({
+        "Kenmerkende soort (N2000)": full_label,
+        "Label kort": short_label,
+    })
+    out = out[
+        (out["Kenmerkende soort (N2000)"] != NO_MATCH_LABEL)
+        & (out["Kenmerkende soort (N2000)"] != "")
+        & (out["Label kort"] != "")
+    ].copy()
+
+    if out.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    return (
+        out.groupby(["Kenmerkende soort (N2000)", "Label kort"], as_index=False)
+        .size()
+        .rename(columns={"size": "Aantal waarnemingen"})
+        .sort_values("Aantal waarnemingen", ascending=False)
+    )
+
+# -----------------------------------------------------------------------------
+# DATA LOAD
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # DATA LOAD
 # -----------------------------------------------------------------------------
@@ -267,9 +335,8 @@ d_soorten = n_soorten - prev_soorten
 st.subheader("🥧 Samenstelling waarnemingen (individuele soorten)")
 df_ind = df_year[(df_year["type"] == "Soort") & (~df_year["soort"].isin(RWS_GROEIVORM_CODES))].copy()
 
-# >>> AANGEPAST: 3 kolommen i.p.v. 2
-c_pie1, c_pie2, c_pie3 = st.columns(3)
-
+# >>> AANGEPAST: 4 kolommen i.p.v. 3, met aparte entiteit voor Kenmerkende soorten (N2000)
+c_pie1, c_pie2, c_pie3, c_pie4 = st.columns(4)
 
 with c_pie1:
     st.markdown("**Verdeling waarnemingen per KRW-score**")
@@ -285,7 +352,6 @@ with c_pie1:
         s = s.where(pd.Series(s).notna(), NO_MATCH_LABEL)
     else:
         s = pd.Series(dtype="object")
-
     if s.empty:
         st.info("Geen KRW-scores beschikbaar voor de huidige selectie.")
     else:
@@ -328,21 +394,18 @@ with c_pie2:
             fig_trofie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_trofie, width='stretch')
             st.caption(f"Aantal zonder trofieniveau-match: {int((t == NO_MATCH_LABEL).sum())}")
-
-    with st.expander("ℹ️ Toelichting"):
-        st.markdown(
-            """
+        with st.expander("ℹ️ Toelichting"):
+            st.markdown(
+                """
 De indeling van soorten naar trofieniveau is gebaseerd op:
 **Verhofstad et al. (2025)** – *Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang*.
 🔗 [Download het rapport](https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf)
 """
-        )
+            )
 
-# >>> NIEUW: derde taartdiagram voor soortgroep
 with c_pie3:
     st.markdown("**Verdeling waarnemingen per soortgroep**")
     pie_df = _speciesgroup_counts(df_ind)
-
     if pie_df.empty:
         st.info("Geen soortgroep-indeling beschikbaar voor de huidige selectie (check mapping in utils.add_species_group_columns).")
     else:
@@ -360,6 +423,30 @@ with c_pie3:
         no_match_count = int(pie_df.loc[pie_df["Soortgroep"] == NO_MATCH_LABEL, "Aantal waarnemingen"].sum())
         st.caption(f"Aantal zonder soortgroep-match: {no_match_count}")
 
+with c_pie4:
+    st.markdown("**Verdeling waarnemingen van Kenmerkende soorten (N2000)**")
+    pie_df = _n2000_counts(df_ind)
+    if pie_df.empty:
+        st.info("Geen Kenmerkende soorten (N2000) beschikbaar voor de huidige selectie.")
+    else:
+        fig_n2000 = px.pie(
+            pie_df,
+            names="Kenmerkende soort (N2000)",
+            values="Aantal waarnemingen",
+            hole=0.35,
+        )
+        fig_n2000.update_traces(
+            textposition="inside",
+            textinfo="none",
+            texttemplate="%{customdata[0]} %{percent:.1%}",
+            customdata=pie_df[["Label kort"]].to_numpy(),
+            hovertemplate="%{label}<br>Aantal waarnemingen: %{value}<br>Percentage: %{percent:.1%}<extra></extra>",
+        )
+        fig_n2000.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_n2000, width='stretch')
+        st.caption(f"Aantal Kenmerkende soorten (N2000)-waarnemingen: {int(pie_df['Aantal waarnemingen'].sum())}")
+
+# KPI-metrics (blijven gelijk)
 # KPI-metrics (blijven gelijk)
 c1, c2, c3, c4 = st.columns(4)
 with c1:

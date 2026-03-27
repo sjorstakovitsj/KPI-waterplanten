@@ -11,6 +11,7 @@ from utils import (
     create_pie_map,
     create_map,
     get_sorted_species_list,
+    get_species_group_mapping,
     EXCLUDED_SPECIES_CODES,
     RWS_GROEIVORM_CODES,
     build_bathymetry_legend_url,
@@ -34,6 +35,16 @@ VEGETATION_LEGEND_ITEMS = [
     ("41–75%", "#91cf60"),
     ("> 75%", "#1a9850"),
 ]
+TOTAL_BED_COVER_LEGEND_ITEMS = [
+    ("0%", "#808080"),
+    ("0.01–1%", "#006400"),
+    ("1–5%", "#2ca02c"),
+    ("5–15%", "#ffd700"),
+    ("15–25%", "#fdb462"),
+    ("25–50%", "#ff7f0e"),
+    ("50–75%", "#d95f02"),
+    ("75–100%", "#d73027"),
+]
 GROEIVORM_COLOR_MAP = {
     "Ondergedoken": "#2ca02c",
     "Emergent": "#ffd700",
@@ -52,12 +63,33 @@ KRW_COLOR_MAP = {
     "Geen match": "#9e9e9e",
 }
 KRW_ORDER = ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)", "Geen match"]
-SOORTGROEPEN_COLOR_MAP = {"chariden":"#1b9e77","iseotiden":"#d95f02","parvopotamiden":"#7570b3","magnopotamiden":"#e7298a","myriophylliden":"#66a61e","vallisneriiden":"#e6ab02","elodeiden":"#a6761d","stratiotiden":"#e6ab02","pepliden":"#1f78b4","batrachiiden":"#b2df8a","nymphaeiden":"#fb9a99","haptofyten":"#cab2d6","Kenmerkende soort (N2000)":"#000000","Overig / Individueel":"#FFD700","Geen match":"#bbbbbb"}
-SOORTGROEPEN_ORDER = [
-    "chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden",
-    "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden",
-    "nymphaeiden", "haptofyten", "Kenmerkende soort (N2000)", "Overig / Individueel", "Geen match",
+def _ordered_unique(values) -> list[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        v = str(value).strip()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        ordered.append(v)
+    return ordered
+
+
+_SOORTGROEPEN_BASE_ORDER = _ordered_unique(get_species_group_mapping().values())
+SOORTGROEPEN_ORDER = _SOORTGROEPEN_BASE_ORDER + ["Overig / Individueel", "Geen match"]
+_SOORTGROEPEN_PALETTE = [
+    "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02",
+    "#a6761d", "#1f78b4", "#b2df8a", "#fb9a99", "#cab2d6", "#fdbf6f",
+    "#6a3d9a", "#ff7f00", "#b15928", "#17becf",
 ]
+SOORTGROEPEN_COLOR_MAP = {
+    group: _SOORTGROEPEN_PALETTE[i % len(_SOORTGROEPEN_PALETTE)]
+    for i, group in enumerate(_SOORTGROEPEN_BASE_ORDER)
+}
+SOORTGROEPEN_COLOR_MAP.update({
+    "Overig / Individueel": "#FFD700",
+    "Geen match": "#bbbbbb",
+})
 
 
 def _render_html_legend(title: str, entries, note: str | None = None, columns: int = 3):
@@ -113,9 +145,9 @@ def render_active_map_legend(layer_mode: str, analysis_level: str, selected_cove
     if selected_coverage_type == "totale bedekking":
         _render_html_legend(
             "Legenda totale bedekking",
-            VEGETATION_LEGEND_ITEMS,
-            note="Zelfde kleurschaal als de kaartmarkeringen voor totale bedekking.",
-            columns=3,
+            TOTAL_BED_COVER_LEGEND_ITEMS,
+            note="Deze specifieke kleurschaal geldt alleen voor de kaartmarkeringen van totale bedekking.",
+            columns=4,
         )
     elif selected_coverage_type == "Groeivormen":
         _render_html_legend(
@@ -359,6 +391,10 @@ def _precompute_for_filter(df_filtered: pd.DataFrame, filter_key: tuple) -> dict
     ][["locatie_id", "soort", "type", "Grootheid", "bedekking_pct", "waarde_bedekking", "totaal_bedekking_locatie"]].copy()
 
     df_species_groups = add_species_group_columns(df_species_raw)
+    # Kenmerkende soorten (N2000) expliciet uitsluiten van soortgroepen,
+    # zodat deze als aparte entiteit behandeld kunnen worden (conform 1_Overzicht.py).
+    if "is_kenmerkende_soort_n2000" in df_species_groups.columns:
+        df_species_groups = df_species_groups[~df_species_groups["is_kenmerkende_soort_n2000"].fillna(False)].copy()
     df_species_groups["bedekking_num"] = _safe_numeric(df_species_groups["bedekkingsgraad_proc"], 0.0).clip(lower=0.0)
 
     pivot_soortgroepen = (
@@ -610,7 +646,7 @@ else:
                 )
                 df_map_data = df_map_data.merge(df_veg, on="locatie_id", how="left")
                 df_map_data["waarde_veg"] = _safe_numeric(df_map_data["waarde_veg"], 0.0)
-                map_obj = create_map(df_map_data, "Vegetatie", label_veg="totale bedekking", basemap="bathymetry")
+                map_obj = create_map(df_map_data, "Vegetatie", label_veg="totale bedekking", value_style="total_bedekking", basemap="bathymetry")
 
             elif selected_coverage_type == "KRW score":
                 # Weighted KRW per locatie: uit precomp als die er is, anders snel berekenen

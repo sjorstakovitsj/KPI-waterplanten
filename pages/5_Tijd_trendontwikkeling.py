@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from streamlit.components.v1 import html
 
 from utils import (
@@ -62,30 +63,141 @@ def _ensure_numeric_cols(df_in: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 def _compute_trend_table(df_filtered: pd.DataFrame, selected_metric: str) -> pd.DataFrame:
-    """Aggregatie per (locatie_id, jaar) -> waarde."""
+    """Aggregatie per (Waterlichaam, locatie_id, jaar) -> waarde."""
+    empty_cols = ["Waterlichaam", "locatie_id", "jaar", "waarde"]
     if df_filtered.empty:
-        return pd.DataFrame(columns=["locatie_id", "jaar", "waarde"])
+        return pd.DataFrame(columns=empty_cols)
+
+    group_cols = [c for c in ["Waterlichaam", "locatie_id", "jaar"] if c in df_filtered.columns]
+    if not {"locatie_id", "jaar"}.issubset(group_cols):
+        return pd.DataFrame(columns=empty_cols)
 
     if selected_metric == "soort_count":
-        # unieke soorten per locatie-jaar
-        base = df_filtered[["locatie_id", "jaar", "soort"]].dropna(subset=["locatie_id", "jaar"])
+        base = df_filtered[group_cols + ["soort"]].dropna(subset=["locatie_id", "jaar"])
         out = (
-            base.groupby(["locatie_id", "jaar"], sort=False, observed=True)["soort"]
+            base.groupby(group_cols, sort=False, observed=True)["soort"]
             .nunique()
             .reset_index(name="waarde")
         )
-        return out
+    else:
+        if selected_metric not in df_filtered.columns:
+            return pd.DataFrame(columns=empty_cols)
+        base = df_filtered[group_cols + [selected_metric]].dropna(subset=["locatie_id", "jaar"])
+        out = (
+            base.groupby(group_cols, sort=False, observed=True)[selected_metric]
+            .mean()
+            .reset_index(name="waarde")
+        )
 
-    # gemiddelde van gekozen metriek per locatie-jaar
-    want_cols = ["locatie_id", "jaar", selected_metric]
-    base = df_filtered[want_cols].dropna(subset=["locatie_id", "jaar"])
-    out = (
-        base.groupby(["locatie_id", "jaar"], sort=False, observed=True)[selected_metric]
-        .mean()
-        .reset_index(name="waarde")
+    if "Waterlichaam" not in out.columns:
+        out["Waterlichaam"] = "Onbekend"
+
+    out["jaar"] = pd.to_numeric(out["jaar"], errors="coerce")
+    out["waarde"] = _as_numeric(out["waarde"])
+    out = out.dropna(subset=["jaar", "waarde", "locatie_id"]).copy()
+    out["jaar"] = out["jaar"].astype(int)
+    return out.sort_values(["Waterlichaam", "locatie_id", "jaar"]).reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
+def _build_meetpunt_trend_figure(df_trend: pd.DataFrame, y_title: str, chart_title: str):
+    """Rustigere maar onderscheidende lijnfiguur: sortering op jaar, subtiele lijnen en per meetpunt een eigen kleur."""
+    if df_trend.empty:
+        return None
+
+    df_plot = df_trend.copy().sort_values(["Waterlichaam", "locatie_id", "jaar"])
+    waterbodies = [wb for wb in df_plot["Waterlichaam"].dropna().astype(str).unique().tolist() if wb]
+    if not waterbodies:
+        waterbodies = ["Onbekend"]
+        df_plot["Waterlichaam"] = "Onbekend"
+
+    rows = len(waterbodies)
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05 if rows > 1 else 0.08,
+        subplot_titles=waterbodies if rows > 1 else None,
     )
-    return out
 
+    all_loc_ids = df_plot["locatie_id"].dropna().astype(str).unique().tolist()
+    palette = (
+        px.colors.qualitative.Safe
+        + px.colors.qualitative.Set2
+        + px.colors.qualitative.Plotly
+        + px.colors.qualitative.D3
+    )
+    color_map = {loc_id: palette[i % len(palette)] for i, loc_id in enumerate(sorted(all_loc_ids))}
+
+    shown_in_legend = set()
+    for row_idx, wb in enumerate(waterbodies, start=1):
+        df_wb = df_plot[df_plot["Waterlichaam"].astype(str) == str(wb)].copy()
+        loc_ids = df_wb["locatie_id"].dropna().astype(str).unique().tolist()
+        for loc_id in loc_ids:
+            df_loc = df_wb[df_wb["locatie_id"].astype(str) == loc_id].copy()
+            if df_loc.empty:
+                continue
+
+            trace_color = color_map.get(loc_id, "#1f77b4")
+            fig.add_trace(
+                go.Scatter(
+                    x=df_loc["jaar"],
+                    y=df_loc["waarde"],
+                    mode="lines+markers",
+                    name=loc_id,
+                    legendgroup=loc_id,
+                    showlegend=loc_id not in shown_in_legend,
+                    line=dict(color=trace_color, width=1.8, shape="linear"),
+                    marker=dict(size=5, color=trace_color, line=dict(width=0.6, color="white")),
+                    opacity=0.9,
+                    hovertemplate=(
+                        f"<b>Waterlichaam:</b> {wb}<br>"
+                        f"<b>Meetpunt:</b> {loc_id}<br>"
+                        "<b>Jaar:</b> %{x}<br>"
+                        f"<b>{y_title}:</b> %{{y:.2f}}<extra></extra>"
+                    ),
+                ),
+                row=row_idx,
+                col=1,
+            )
+            shown_in_legend.add(loc_id)
+
+        fig.update_yaxes(
+            title_text=y_title,
+            row=row_idx,
+            col=1,
+            rangemode="tozero",
+            gridcolor="rgba(0,0,0,0.08)",
+            zeroline=False,
+        )
+
+    fig.update_xaxes(
+        title_text="Jaar",
+        tickmode="linear",
+        dtick=1,
+        gridcolor="rgba(0,0,0,0.08)",
+    )
+    fig.update_layout(
+        title=chart_title,
+        height=max(420, 260 * rows),
+        hovermode="closest",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        margin=dict(l=40, r=20, t=70, b=40),
+        legend=dict(
+            title="Meetpunt",
+            orientation="v",
+            yanchor="top",
+            y=1.0,
+            xanchor="left",
+            x=1.01,
+            font=dict(size=10),
+            itemsizing="constant",
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
+        ),
+    )
+    return fig
 
 def _compute_slopes_vectorized(df_trend: pd.DataFrame, min_years: int = 5) -> pd.DataFrame:
     """Vectorized slope (OLS) per locatie.
@@ -507,15 +619,27 @@ st.subheader(f"Verloop {selected_metric_label} door de jaren heen")
 if species_is_selected and selected_metric == "bedekking_pct":
     st.caption(f"Weergave voor soort: **{selected_species}**")
 
-fig_line = px.line(
-    df_trend,
-    x="jaar",
-    y="waarde",
-    color="locatie_id",
-    markers=True,
-    title="Trendontwikkeling per meetpunt in geselecteerde wateren",
-)
-st.plotly_chart(fig_line, width='stretch')
+if df_trend.empty:
+    st.info("Geen trenddata beschikbaar voor de huidige selectie.")
+else:
+    n_wateren = df_trend["Waterlichaam"].nunique() if "Waterlichaam" in df_trend.columns else 1
+    n_locaties = df_trend["locatie_id"].nunique()
+    fig_line = _build_meetpunt_trend_figure(
+        df_trend,
+        y_title=selected_metric_label,
+        chart_title="Trendontwikkeling per meetpunt in geselecteerde wateren",
+    )
+    st.plotly_chart(fig_line, width='stretch')
+    if n_wateren > 1:
+        st.caption(
+            f"De lijnen zijn opgesplitst per waterlichaam ({n_wateren} panelen) en binnen elk paneel op jaar gesorteerd. "
+            f"Daardoor zijn individuele meetpunten rustiger en beter te volgen. Aantal meetpunten in selectie: {n_locaties}."
+        )
+    else:
+        st.caption(
+            f"De lijnen zijn op jaar gesorteerd en subtieler vormgegeven, zodat individuele meetpunten beter te volgen zijn. "
+            f"Aantal meetpunten in selectie: {n_locaties}."
+        )
 
 # -------------------------------------------------------------
 # 2) Regressieanalyse – verbetert of verslechtert de toestand?

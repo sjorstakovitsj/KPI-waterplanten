@@ -119,6 +119,20 @@ def _ensure_nomatch_display_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["krw_class_weergave"] = df["krw_class"].astype(object)
         df.loc[df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
 
+    if "is_kenmerkende_soort_n2000" not in df.columns:
+        if "Grootheid" in df.columns:
+            df["is_kenmerkende_soort_n2000"] = df["Grootheid"].astype(str).eq("AANWZHD")
+        else:
+            df["is_kenmerkende_soort_n2000"] = False
+
+    if "kenmerkende_soort_n2000_weergave" not in df.columns:
+        display_source = df["soort_display"] if "soort_display" in df.columns else (df["soort"] if "soort" in df.columns else pd.Series("", index=df.index))
+        df["kenmerkende_soort_n2000_weergave"] = np.where(
+            df["is_kenmerkende_soort_n2000"].fillna(False),
+            display_source.astype(str),
+            "Geen match",
+        )
+
     return df
 
 
@@ -171,6 +185,31 @@ def _heatmap_matrix(
 
         df_h = df_h.dropna(subset=["jaar"])
         cat_col = "soortgroep_cat"
+        bedekking_source = "bedekkingsgraad_proc" if "bedekkingsgraad_proc" in df_h.columns else "bedekking_pct"
+        df_h["bedekking_num"] = pd.to_numeric(df_h[bedekking_source], errors="coerce").fillna(0).clip(lower=0)
+
+    elif heatmap_param == "Kenmerkende soorten (N2000)":
+        df_species = df_base[df_base["type"] == "Soort"].copy()
+        df_h = add_species_group_columns(df_species)
+
+        if "Grootheid" in df_h.columns:
+            df_h = df_h[df_h["Grootheid"] == "AANWZHD"].copy()
+        else:
+            df_h = df_h[df_h["is_kenmerkende_soort_n2000"].fillna(False)].copy()
+
+        if "kenmerkende_soort_n2000_weergave" in df_h.columns:
+            df_h["n2000_cat"] = df_h["kenmerkende_soort_n2000_weergave"].astype(object)
+        elif "soort_display" in df_h.columns:
+            df_h["n2000_cat"] = df_h["soort_display"].astype(object)
+        else:
+            df_h["n2000_cat"] = df_h["soort"].astype(object)
+
+        df_h.loc[
+            df_h["n2000_cat"].isna() | (df_h["n2000_cat"].astype(str).str.strip() == ""),
+            "n2000_cat",
+        ] = "Geen match"
+        df_h = df_h.dropna(subset=["jaar"])
+        cat_col = "n2000_cat"
         bedekking_source = "bedekkingsgraad_proc" if "bedekkingsgraad_proc" in df_h.columns else "bedekking_pct"
         df_h["bedekking_num"] = pd.to_numeric(df_h[bedekking_source], errors="coerce").fillna(0).clip(lower=0)
 
@@ -258,6 +297,12 @@ def _heatmap_matrix(
         keep = [x for x in order if x in heat.index]
         rest = [x for x in heat.index if x not in keep]
         heat = heat.reindex(keep + rest)
+
+    elif heatmap_param == "Kenmerkende soorten (N2000)":
+        ordered = sorted([x for x in heat.index if x != "Geen match"], key=lambda x: str(x).lower())
+        if "Geen match" in heat.index:
+            ordered.append("Geen match")
+        heat = heat.reindex(ordered)
 
     return heat, cat_col, value_label
 
@@ -404,6 +449,7 @@ De heatmap toont per **jaar** hoe de **verdeling** eruitziet van een gekozen par
 - Groeivormen
 - Soortgroepen
 - KRW score
+- Kenmerkende soorten (N2000)
 
 Je kunt kiezen:
 - **Records** (aantal regels)
@@ -411,11 +457,11 @@ Je kunt kiezen:
 
 En optioneel normaliseren per jaar (0–100% verdeling).
 
-Voor **Trofieniveau**, **Soortgroepen** en **KRW score** worden ook records zonder match expliciet getoond als **Geen match**.
+Voor **Trofieniveau**, **Soortgroepen**, **KRW score** en **Kenmerkende soorten (N2000)** worden ook records zonder match expliciet getoond als **Geen match**.
 """
     )
 
-heatmap_param = st.selectbox("Kies parameter voor heatmap", ["Trofieniveau", "Groeivormen", "Soortgroepen", "KRW score"])
+heatmap_param = st.selectbox("Kies parameter voor heatmap", ["Trofieniveau", "Groeivormen", "Soortgroepen", "KRW score", "Kenmerkende soorten (N2000)"])
 heatmap_basis = st.radio(
     "Bereken verdeling op basis van",
     ["Records (aantal waarnemingen)", "Bedekking-gewogen (som bedekking)"],

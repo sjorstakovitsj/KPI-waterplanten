@@ -48,7 +48,7 @@ LOOKUP_PARQUET = CACHE_DIR / "species_lookup.parquet"
 COORD_CACHE_PARQUET = CACHE_DIR / "coord_cache.parquet"
 
 # Verhoog dit als je pipeline-logica wijzigt (force rebuild via cache key)
-PIPELINE_VERSION = "2026-03-24_duckdb_parquet_coords_v3_nomatch_schema"
+PIPELINE_VERSION = "2026-03-27_duckdb_parquet_coords_v4_n2000_as_entity"
 
 
 # =============================================================================
@@ -599,6 +599,11 @@ def get_species_group_mapping() -> Dict[str, str]:
         "Amblystegium varium": "haptofyten",
         "Amblystegium fluviatile": "haptofyten",
         "Leptodictyum riparium": "haptofyten",
+        # --- LEMNIDEN ---
+        "Lemna gibba": "lemniden",
+        "Lemna minor": "lemniden",
+        "Lemna trisulca": "lemniden",
+        "Spirodela polyrhiza": "lemniden"
     }
 
 
@@ -610,6 +615,7 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     Belangrijk:
     - 'soortgroep' behoudt het bestaande fallback-gedrag ('Overig / Individueel') voor compatibiliteit.
+    - Kenmerkende soorten (N2000) tellen niet meer mee als soortgroep, maar worden als aparte entiteit gemarkeerd.
     - 'soortgroep_weergave' toont expliciet 'Geen match' voor soorten zonder mapping,
       zodat deze in grafieken en tellingen zichtbaar kunnen worden.
     - 'soortgroep_match_status' geeft per record aan of er wel/geen mapping is gevonden.
@@ -630,6 +636,9 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["soortgroep"] = pd.Series(dtype="object")
         df["soortgroep_weergave"] = pd.Series(dtype="object")
         df["soortgroep_match_status"] = pd.Series(dtype="object")
+        df["is_kenmerkende_soort_n2000"] = pd.Series(dtype="bool")
+        df["kenmerkende_soort_n2000_weergave"] = pd.Series(dtype="object")
+        df["kenmerkende_soort_n2000_match_status"] = pd.Series(dtype="object")
         df["bedekkingsgraad_proc"] = pd.Series(dtype="float")
         return df
 
@@ -639,7 +648,6 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     if "Grootheid" in df.columns:
         mask_aanw = df["Grootheid"].astype(str) == "AANWZHD"
-        soortgroep.loc[mask_aanw] = "Kenmerkende soort (N2000)"
     else:
         mask_aanw = pd.Series(False, index=df.index)
 
@@ -652,10 +660,17 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
     mask_genus = mask_need & (genus != "Potamogeton") & genus_map.notna()
     soortgroep.loc[mask_genus] = genus_map.loc[mask_genus].astype(str)
 
-    mask_match = mask_aanw | mask_direct | mask_genus
+    mask_match = mask_direct | mask_genus
+    display_source = df["soort_display"] if "soort_display" in df.columns else soort
+
     df["soortgroep"] = soortgroep
     df["soortgroep_match_status"] = np.where(mask_match, "Match", "Geen match")
     df["soortgroep_weergave"] = np.where(mask_match, df["soortgroep"], "Geen match")
+
+    # Kenmerkende soorten (N2000) als aparte entiteit
+    df["is_kenmerkende_soort_n2000"] = mask_aanw.astype(bool)
+    df["kenmerkende_soort_n2000_match_status"] = np.where(mask_aanw, "Match", "Geen match")
+    df["kenmerkende_soort_n2000_weergave"] = np.where(mask_aanw, display_source.astype(str), "Geen match")
 
     target_col = "bedekking_pct"
     if target_col not in df.columns:
@@ -666,7 +681,9 @@ def add_species_group_columns(df: pd.DataFrame) -> pd.DataFrame:
         s = df[target_col].fillna(0).astype(str).str.replace(",", ".", regex=False)
         s = s.str.replace("<", "", regex=False).str.replace(">", "", regex=False).str.strip()
         df["bedekkingsgraad_proc"] = pd.to_numeric(s, errors="coerce").fillna(0.0).astype(float)
+
     return df
+
 
 def get_sorted_species_list(df: pd.DataFrame) -> list:
     """Gesorteerde lijst met individuele soorten (excl. verzamelcodes)."""
@@ -762,7 +779,7 @@ def load_species_lookup() -> pd.DataFrame:
 # SCHEMA HARDENING / MATCH DISPLAY KOL0MMEN
 # =============================================================================
 def _ensure_match_display_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Zorg dat match-/weergavekolommen voor KRW en trofieniveau altijd aanwezig zijn.
+    """Zorg dat match-/weergavekolommen voor KRW, trofieniveau en N2000 altijd aanwezig zijn.
 
     Dit maakt de app robuust voor oudere cached parquet-bestanden en voorkomt KeyErrors
     in pagina's die de nieuwe kolommen gebruiken.
@@ -801,7 +818,28 @@ def _ensure_match_display_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["krw_class_weergave"] = df["krw_class"].astype(object)
         df.loc[df["krw_class_weergave"].isna(), "krw_class_weergave"] = "Geen match"
 
+    if "is_kenmerkende_soort_n2000" not in df.columns:
+        if "Grootheid" in df.columns:
+            df["is_kenmerkende_soort_n2000"] = df["Grootheid"].astype(str).eq("AANWZHD")
+        else:
+            df["is_kenmerkende_soort_n2000"] = False
+    if "kenmerkende_soort_n2000_match_status" not in df.columns:
+        df["kenmerkende_soort_n2000_match_status"] = np.where(
+            df["is_kenmerkende_soort_n2000"].fillna(False),
+            "Match",
+            "Geen match",
+        )
+    if "kenmerkende_soort_n2000_weergave" not in df.columns:
+        display_source = df["soort_display"] if "soort_display" in df.columns else (df["soort"] if "soort" in df.columns else pd.Series("", index=df.index))
+        df["kenmerkende_soort_n2000_weergave"] = np.where(
+            df["is_kenmerkende_soort_n2000"].fillna(False),
+            display_source.astype(str),
+            "Geen match",
+        )
+
     return df
+
+
 def _file_signature() -> Tuple[str, float, float, str]:
     """Cache key: pipeline versie + mtimes."""
     csv_path = Path(FILE_PATH)
@@ -1277,6 +1315,31 @@ def get_color_vegetation(value):
     return "#1a9850"
 
 
+def get_color_total_bedekking(value):
+    """Specifieke kleurindeling voor totale bedekking in de ruimtelijke analyse."""
+    if pd.isna(value):
+        return "gray"
+    try:
+        v = float(value)
+    except Exception:
+        return "gray"
+    if v <= 0:
+        return "#808080"  # grijs
+    elif v < 1:
+        return "#006400"  # donkergroen
+    elif v < 5:
+        return "#2ca02c"  # groen
+    elif v < 15:
+        return "#ffd700"  # geel
+    elif v < 25:
+        return "#fdb462"  # lichtoranje
+    elif v < 50:
+        return "#ff7f0e"  # oranje
+    elif v < 75:
+        return "#d95f02"  # donkeroranje
+    return "#d73027"  # rood
+
+
 def get_color_depth(value):
     """Lichtblauw (ondiep) -> Donkerblauw (diep)"""
     if pd.isna(value):
@@ -1534,6 +1597,10 @@ def create_map(dataframe, mode, label_veg="Vegetatie", value_style="vegetation",
                     color = get_color_krw(val)
                     main_line = f"<b>🌱 {label_veg}:</b> {val:.2f}"
                     radius = 6
+                elif value_style == "total_bedekking":
+                    color = get_color_total_bedekking(val)
+                    main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
+                    radius = 4 + (min(val, 100) / 100 * 6) if val > 0 else 4
                 else:
                     color = get_color_vegetation(val)
                     main_line = f"<b>🌱 {label_veg}:</b> {val:.1f}%"
