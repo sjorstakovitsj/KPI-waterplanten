@@ -2,11 +2,17 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-
 import folium
 from streamlit_folium import st_folium
-
-from utils import load_data, interpret_soil_state, create_folium_base_map, build_bathymetry_legend_url
+from utils import (
+    load_data,
+    load_chemistry_data,
+    get_chemistry_location_points,
+    add_chemistry_locations_to_map,
+    interpret_soil_state,
+    create_folium_base_map,
+    build_bathymetry_legend_url,
+)
 
 st.set_page_config(layout="wide", page_title="Meetpunt Detail")
 st.title("📍 Meetpunt detailniveau analyse")
@@ -14,6 +20,8 @@ st.markdown("Gedetailleerde analyse van een specifiek monitoringspunt.")
 
 # --- DATA INLADEN ---
 df = load_data()
+df_chem = load_chemistry_data()
+df_chem_points = get_chemistry_location_points(df_chem=df_chem)
 
 # --- SIDEBAR: FILTERS ---
 st.sidebar.header("Filters")
@@ -28,7 +36,6 @@ selected_projects = st.sidebar.multiselect(
     options=all_projects,
     default=all_projects
 )
-
 df_proj_filtered = df[df["Project"].isin(selected_projects)].copy()
 
 # 2) Waterlichaam
@@ -38,7 +45,6 @@ selected_bodies = st.sidebar.multiselect(
     options=all_bodies,
     default=all_bodies
 )
-
 df_body_filtered = df_proj_filtered[df_proj_filtered["Waterlichaam"].isin(selected_bodies)].copy()
 
 # 2b) Jaarfilter (range slider, default = laatste 10 jaar)
@@ -46,9 +52,10 @@ year_values = sorted(pd.to_numeric(df_body_filtered["jaar"], errors="coerce").dr
 if not year_values:
     st.warning("Geen jaardata beschikbaar voor de geselecteerde filters.")
     st.stop()
+
 min_year_dataset = int(min(year_values))
 max_year_dataset = int(max(year_values))
-default_year_start = max(min_year_dataset, max_year_dataset - 9)
+default_year_start = max(min_year_dataset, max_year_dataset - 10)
 selected_year_range = st.sidebar.slider(
     "Selecteer jaarbereik",
     min_value=min_year_dataset,
@@ -57,7 +64,9 @@ selected_year_range = st.sidebar.slider(
     step=1,
 )
 df_body_filtered = df_body_filtered[
-    pd.to_numeric(df_body_filtered["jaar"], errors="coerce").between(selected_year_range[0], selected_year_range[1], inclusive="both")
+    pd.to_numeric(df_body_filtered["jaar"], errors="coerce").between(
+        selected_year_range[0], selected_year_range[1], inclusive="both"
+    )
 ].copy()
 if df_body_filtered.empty:
     st.warning("Geen meetpunten gevonden binnen het geselecteerde jaarbereik.")
@@ -77,6 +86,7 @@ loc_year_counts = (
 if loc_year_counts.empty:
     st.warning("Geen meetjaren beschikbaar voor de geselecteerde filters.")
     st.stop()
+
 min_meetjaren = int(loc_year_counts["n_meetjaren"].min())
 max_meetjaren = int(loc_year_counts["n_meetjaren"].max())
 default_min_meetjaren = min(max(3, min_meetjaren), max_meetjaren)
@@ -88,7 +98,9 @@ selected_meetjaren_range = st.sidebar.slider(
     step=1,
 )
 valid_locs = loc_year_counts[
-    loc_year_counts["n_meetjaren"].between(selected_meetjaren_range[0], selected_meetjaren_range[1], inclusive="both")
+    loc_year_counts["n_meetjaren"].between(
+        selected_meetjaren_range[0], selected_meetjaren_range[1], inclusive="both"
+    )
 ]["locatie_id"]
 df_body_filtered = df_body_filtered[df_body_filtered["locatie_id"].isin(valid_locs)].copy()
 if df_body_filtered.empty:
@@ -119,6 +131,7 @@ if state_key not in st.session_state or st.session_state[state_key] not in avail
 
 st.subheader("🗺️ Overzicht meetpunten")
 st.caption("Hover over een meetpunt voor details en klik op een meetpunt om de tijdreeksen, diagnose en aangetroffen soorten hieronder te tonen.")
+st.caption("Paarse ruitjes op de kaart geven de locaties van chemische metingen weer.")
 
 if locs_overview.empty:
     st.info("Geen kaartcoördinaten beschikbaar voor de meetpunten in deze selectie.")
@@ -148,6 +161,9 @@ else:
             tooltip=tooltip_html,
             popup=str(row.locatie_id),
         ).add_to(m)
+
+    # Overlay chemische meetlocaties als paarse ruitjes, zonder bestaande functionaliteit te veranderen.
+    m = add_chemistry_locations_to_map(m, df_chem_points)
 
     map_event = st_folium(
         m,
@@ -188,6 +204,7 @@ selected_loc = st.session_state[state_key]
 st.caption(f"Geselecteerd meetpunt: **{selected_loc}**")
 if "meetpunt_detail_selectbox" not in st.session_state or st.session_state["meetpunt_detail_selectbox"] not in available_locs:
     st.session_state["meetpunt_detail_selectbox"] = selected_loc
+
 selected_loc = st.selectbox(
     "Of kies handmatig een meetpunt",
     available_locs,
@@ -199,16 +216,13 @@ st.session_state[state_key] = selected_loc
 # --- DATA VOORBEREIDING ---
 # ✅ Belangrijk: gebruik de gefilterde set (niet de volledige df)
 df_loc = df_body_filtered[df_body_filtered["locatie_id"] == selected_loc].copy()
-
 if df_loc.empty:
     st.warning("Geen data voor deze meetlocatie binnen de huidige filters.")
     st.stop()
 
 # --- HEADER INFO (KPI'S) ---
-# Precompute means (micro-optimalisatie)
 mean_diepte = pd.to_numeric(df_loc["diepte_m"], errors="coerce").mean()
 mean_doorzicht = pd.to_numeric(df_loc["doorzicht_m"], errors="coerce").mean()
-
 col1, col2, col3 = st.columns(3)
 col1.metric("Aantal metingen (jaren)", len(df_loc["jaar"].dropna().unique()))
 col2.metric("Gemiddelde diepte", f"{mean_diepte:.2f} m" if pd.notna(mean_diepte) else "n.v.t.")
@@ -219,8 +233,6 @@ tab1, tab2 = st.tabs(["📈 Tijdreeksen", "📝 Diagnose en aangetroffen soorten
 
 with tab1:
     st.subheader(f"Trendontwikkeling: {selected_loc}")
-
-    # Data aggregatie per jaar
     df_trend = (
         df_loc.groupby("jaar", as_index=False)
         .agg(
@@ -231,13 +243,10 @@ with tab1:
         .sort_values("jaar")
     )
 
-    # veilige y2-range (avoid NaN)
     max_diepte = pd.to_numeric(df_trend["diepte_m"], errors="coerce").max()
     y2_max = 3.0 if pd.isna(max_diepte) else max(3.0, float(max_diepte) * 1.2)
 
     fig = go.Figure()
-
-    # 1) Diepte (vlak, achtergrond) rechter as
     fig.add_trace(go.Scatter(
         x=df_trend["jaar"],
         y=df_trend["diepte_m"],
@@ -247,8 +256,6 @@ with tab1:
         fillcolor="rgba(200, 230, 255, 0.3)",
         yaxis="y2",
     ))
-
-    # 2) Bedekking (staven) linker as
     fig.add_trace(go.Bar(
         x=df_trend["jaar"],
         y=df_trend["totaal_bedekking_locatie"],
@@ -256,8 +263,6 @@ with tab1:
         marker_color="rgba(34, 139, 34, 0.6)",
         yaxis="y",
     ))
-
-    # 3) Doorzicht (lijn) rechter as
     fig.add_trace(go.Scatter(
         x=df_trend["jaar"],
         y=df_trend["doorzicht_m"],
@@ -267,7 +272,6 @@ with tab1:
         marker=dict(size=8),
         yaxis="y2",
     ))
-
     fig.update_layout(
         title="Interactie: vegetatie (staven) vs. waterkolom (lijn/vlak)",
         xaxis=dict(title="Jaar"),
@@ -289,7 +293,6 @@ with tab1:
         hovermode="x unified",
         height=450,
     )
-
     st.plotly_chart(fig, width='stretch')
 
 with tab2:
@@ -298,20 +301,14 @@ with tab2:
         st.info("Geen jaarinformatie beschikbaar voor deze locatie.")
     else:
         df_latest = df_loc[df_loc["jaar"] == latest_year].copy()
-
         col_a, col_b = st.columns([1, 1])
-
         with col_a:
             st.markdown(f"### Bodemdiagnose ({int(latest_year)})")
             st.write(interpret_soil_state(df_latest))
-
         with col_b:
             st.markdown("### Soortenlijst en historie")
-
-            # --- 1) Historie: unieke jaren per soort (sneller/cleaner dan groupby.apply)
             df_hist = df_loc[df_loc["type"] == "Soort"][["soort", "jaar"]].dropna().copy()
             df_hist = df_hist.drop_duplicates(subset=["soort", "jaar"]).sort_values(["soort", "jaar"], ascending=[True, False])
-
             if df_hist.empty:
                 species_history = pd.DataFrame(columns=["soort", "Gemeten in jaren"])
             else:
@@ -322,14 +319,10 @@ with tab2:
                 )
                 species_history["Gemeten in jaren"] = species_history["Gemeten in jaren"].apply(lambda yrs: ", ".join(map(str, yrs)))
 
-            # --- 2) Laatste jaar soorten
             df_species_now = df_latest[df_latest["type"] == "Soort"][["soort", "bedekking_pct", "groeivorm"]].copy()
-
             if not df_species_now.empty:
                 df_combined = df_species_now.merge(species_history, on="soort", how="left")
-                # sorteer op bedekking
                 df_combined["bedekking_pct"] = pd.to_numeric(df_combined["bedekking_pct"], errors="coerce").fillna(0.0)
-
                 st.dataframe(
                     df_combined.sort_values("bedekking_pct", ascending=False)
                     .style.background_gradient(subset=["bedekking_pct"], cmap="Greens"),
@@ -338,6 +331,6 @@ with tab2:
                 )
             else:
                 st.info(f"Geen specifieke soorten geregistreerd in {int(latest_year)}.")
-                if not species_history.empty:
-                    st.write("Historisch aangetroffen soorten (niet in laatste jaar):")
-                    st.dataframe(species_history, width='stretch', hide_index=True)
+            if not species_history.empty:
+                st.write("Historisch aangetroffen soorten (niet in laatste jaar):")
+                st.dataframe(species_history, width='stretch', hide_index=True)

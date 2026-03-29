@@ -7,9 +7,12 @@ from streamlit_folium import st_folium
 
 from utils import (
     load_data,
+    load_chemistry_data,
     add_species_group_columns,
     create_pie_map,
     create_map,
+    get_chemistry_location_points,
+    add_chemistry_locations_to_map,
     get_sorted_species_list,
     get_species_group_mapping,
     EXCLUDED_SPECIES_CODES,
@@ -450,6 +453,10 @@ if df_filtered.empty:
 
 filter_key = (int(selected_year), tuple(selected_projects))
 
+# Chemische meetlocaties voor overlay op de kaart (gecached via utils).
+df_chem = load_chemistry_data()
+df_chem_points = get_chemistry_location_points(df_chem=df_chem)
+
 st.sidebar.markdown("---")
 st.sidebar.header("Kaartinstellingen")
 
@@ -529,6 +536,8 @@ elif layer_mode == "Diepte":
     st.caption("Legenda: Lichtblauw (Ondiep) → Donkerblauw (Diep)")
 else:
     st.caption("Legenda: Bruin (Troebel) → Groen (Helder)")
+
+st.caption("Paarse ruitjes op de kaart geven de locaties van chemische metingen weer.")
 
 # -----------------------------------------------------------------------------
 # MAP DATA + RENDER
@@ -702,6 +711,7 @@ else:
                 map_obj = create_map(df_map_data, "Vegetatie", label_veg=selected_coverage_type, basemap="bathymetry")
 
 # Render map
+map_obj = add_chemistry_locations_to_map(map_obj, df_chem_points)
 st_folium(map_obj, height=600, width=None)
 
 legend_url = build_bathymetry_legend_url()

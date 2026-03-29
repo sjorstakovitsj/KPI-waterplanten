@@ -674,11 +674,11 @@ df_slopes = _compute_slopes_vectorized(df_trend, min_years=MIN_JAREN)
 if not df_slopes.empty:
     # Thresholds per metriek
     if selected_metric in ["diepte_m", "doorzicht_m"]:
-        threshold = 0.1
+        threshold = 0.2
     elif selected_metric == "soort_count":
-        threshold = 0.4
-    else:
         threshold = 1.0
+    else:
+        threshold = 2.0
 
     df_slopes["Trend"] = df_slopes["slope"].apply(lambda x: categorize_slope_trend(x, threshold))
 

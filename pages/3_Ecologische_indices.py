@@ -3,8 +3,23 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from utils import load_data, add_species_group_columns
-
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from utils import ( 
+ load_data, 
+ add_species_group_columns, 
+ load_chemistry_data, 
+ load_ecology_timeseries_data_filtered, 
+ load_filtered_ecology_base, 
+ get_bubble_yearly_filtered, 
+ get_available_chemistry_locations, 
+ get_available_chemistry_parameter_labels, 
+ get_preferred_chemistry_locations, 
+ get_chem_ecology_timeseries,
+ summarize_chemistry_period_average,
+ CHEM_PARAM_SUGGESTIONS,
+ SEASON_ORDER,
+)
 st.set_page_config(layout="wide")
 st.title("🌿 Ecologische indices")
 
@@ -335,16 +350,358 @@ selected_bodies = st.sidebar.multiselect(
     default=all_bodies,
 )
 
-df_filtered_base = _filter_base(df, tuple(selected_projects), tuple(selected_bodies))
+df_filtered_base = load_filtered_ecology_base(tuple(selected_projects), tuple(selected_bodies))
 
 # alleen soorten (gecached + numeric)
 df_species_only = _species_only(df_filtered_base)
+
+# -----------------------------------------------------------------------------
+# GEDEELDE JAARSLIDER (chemie vs ecologie + bubble plot)
+# -----------------------------------------------------------------------------
+df_bubble = get_bubble_yearly_filtered(tuple(selected_projects), tuple(selected_bodies))
+shared_years = sorted(
+    pd.to_numeric(df_bubble.get("jaar"), errors="coerce").dropna().astype(int).unique().tolist()
+) if not df_bubble.empty else []
+
+if not shared_years:
+    st.warning("Geen jaardata beschikbaar voor de gedeelde periode-selectie.")
+    shared_period = None
+else:
+    shared_min_year = int(min(shared_years))
+    shared_max_year = int(max(shared_years))
+    shared_period = st.slider(
+        "Selecteer periode (voor chemie vs ecologie én bubble plot)",
+        shared_min_year,
+        shared_max_year,
+        [shared_min_year, shared_max_year],
+        key="ecol_shared_period",
+    )
+
+# -----------------------------------------------------------------------------
+# CHEMIE VS ECOLOGIE (DUBBELE Y-AS)
+# -----------------------------------------------------------------------------
+st.subheader("🧪 Chemie vs ecologische indices")
+st.caption("Deze grafiek staat boven de bubble plot en gebruikt dezelfde periode-selectie als de bubble plot. Chemische metingen worden standaard inclusief niet-definitieve records getoond en de chemische lijnen behouden markers. Voor performance wordt waar mogelijk DuckDB/parquet gebruikt voor de ecologische basis- en bubbledata.")
+with st.expander("ℹ️ Uitleg: vergelijking chemische stoffen met ecologische bedekking / index", expanded=False):
+    st.markdown(
+        """
+Deze interactieve grafiek combineert **jaartallen op de x-as** met een **dubbele Y-as**:
+- **Linker Y-as:** bedekkingsgraad / index
+- **Rechter Y-as:** concentratie t/m 5 geselecteerde chemische stoffen
+
+Je kunt hiermee bijvoorbeeld nagaan of veranderingen in **stikstof, fosfor of koolstof** samenvallen met veranderingen in:
+- totale bedekking
+- soortgroepen
+- trofieniveau
+- KRW-score
+- kenmerkende soorten (N2000)
+- groeivormen
+
+**Seizoensfilter**
+- Voorjaar = maart t/m mei
+- Zomer = juni t/m augustus
+- Najaar = september t/m november
+- Winter = december t/m februari
+
+De chemische reeksen worden als **gemiddelde van de geselecteerde seizoenen** getoond voor de gekozen locatie. Als je bijvoorbeeld alleen **Zomer** kiest en de jaarslider op **2015–2020** zet, dan worden per stof de **zomergemiddelden per jaar** getoond én daarnaast het **gemiddelde van die zomers over 2015–2020** samengevat.
+        """
+    )
+
+df_eco_timeseries = load_ecology_timeseries_data_filtered(tuple(selected_projects), tuple(selected_bodies))
+df_chem = load_chemistry_data()
+
+if df_eco_timeseries.empty:
+    st.warning("Ecologische tijdreeksdata kon niet worden voorbereid voor de chemie-koppeling.")
+elif df_chem.empty:
+    st.warning("Chemische data kon niet worden geladen voor de dubbele Y-as grafiek.")
+else:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Chemie vs bedekking")
+
+    chem_locations = get_available_chemistry_locations(df_chem)
+    chem_location_options, default_loc, chem_location_required = get_preferred_chemistry_locations(
+        tuple(selected_bodies),
+        chem_locations,
+    )
+    if not chem_location_options and chem_locations:
+        chem_location_options = chem_locations
+    selected_chem_location = st.sidebar.selectbox(
+        "Meetlocatie chemie",
+        options=chem_location_options,
+        index=(chem_location_options.index(default_loc) if (default_loc in chem_location_options) else None),
+        key="chem_vs_eco_location",
+        placeholder="Kies een meetlocatie",
+    ) if chem_location_options else None
+    if chem_location_required and selected_chem_location is None:
+        st.sidebar.info("Kies een meetlocatie chemie voor het geselecteerde waterlichaam / de geselecteerde waterlichamen.")
+
+    chem_labels = get_available_chemistry_parameter_labels(df_chem)
+    preferred_labels = []
+    for code in CHEM_PARAM_SUGGESTIONS:
+        preferred_labels.extend([x for x in chem_labels if str(x).startswith(f"{code} ") or str(x) == code or str(x).startswith(f"{code}—") or str(x).startswith(f"{code} —")])
+    preferred_labels = [x for x in preferred_labels if x in chem_labels]
+    default_chems = preferred_labels[:2] if preferred_labels else chem_labels[:1]
+    selected_chems = st.sidebar.multiselect(
+        "Selecteer stof(fen) (max. 5)",
+        options=chem_labels,
+        default=default_chems,
+        key="chem_vs_eco_params",
+        max_selections=5,
+    )
+    if len(selected_chems) > 5:
+        selected_chems = selected_chems[:5]
+        st.sidebar.warning("Maximaal 5 stoffen tegelijk worden getoond; de selectie is teruggebracht naar de eerste 5.")
+
+    left_metric_dual = st.sidebar.selectbox(
+        "Linker Y-as",
+        [
+            "Totale bedekking",
+            "Soortgroep",
+            "Trofieniveau",
+            "KRW score",
+            "Kenmerkende soort (N2000)",
+            "Groeivormen",
+        ],
+        index=0,
+        key="chem_vs_eco_left_metric",
+    )
+    left_display_mode = st.sidebar.radio(
+        "Weergave linker Y-as",
+        ["Lijnen", "Kolommen", "Gestapeld gebied"],
+        index=1,
+        key="chem_vs_eco_left_display_mode",
+    )
+    selected_seasons = st.sidebar.multiselect(
+        "Seizoensgemiddelden chemie",
+        options=SEASON_ORDER,
+        default=SEASON_ORDER,
+        key="chem_vs_eco_seasons",
+    )
+    definitive_only = False
+    show_chem_markers = True
+
+    krw_mode = "index"
+    n2000_mode = "records"
+    if left_metric_dual == "KRW score":
+        krw_mode = st.sidebar.radio(
+            "KRW-score tonen als",
+            ["index", "klassen"],
+            index=0,
+            horizontal=True,
+            key="chem_vs_eco_krw_mode",
+        )
+    if left_metric_dual == "Kenmerkende soort (N2000)":
+        n2000_mode = st.sidebar.radio(
+            "Kenmerkende soort (N2000) tonen als",
+            ["records", "soorten"],
+            index=0,
+            horizontal=True,
+            key="chem_vs_eco_n2000_mode",
+        )
+
+    top_n_dual = None
+    if left_metric_dual in {"Soortgroep", "Trofieniveau", "Groeivormen", "Kenmerkende soort (N2000)"}:
+        top_n_dual = st.sidebar.slider(
+            "Max. aantal ecologische series links",
+            min_value=1,
+            max_value=12,
+            value=6,
+            key="chem_vs_eco_top_n",
+        )
+
+    eco_mode = "default"
+    if left_metric_dual == "KRW score":
+        eco_mode = krw_mode
+    elif left_metric_dual == "Kenmerkende soort (N2000)":
+        eco_mode = n2000_mode
+
+    eco_year_dual, chem_year_dual, common_years_dual = get_chem_ecology_timeseries(
+        df_eco=df_eco_timeseries,
+        df_chem=df_chem,
+        project_sel=tuple(selected_projects),
+        body_sel=tuple(selected_bodies),
+        ecology_metric=left_metric_dual,
+        chemistry_labels=tuple(selected_chems),
+        chemistry_location=selected_chem_location,
+        ecology_mode=eco_mode,
+        definitive_only=definitive_only,
+        seasons=tuple(selected_seasons),
+        top_n=top_n_dual,
+    )
+
+    if chem_location_required and selected_chem_location is None:
+        st.info("Kies eerst een meetlocatie chemie voor het geselecteerde waterlichaam / de geselecteerde waterlichamen.")
+    elif not selected_chems:
+        st.info("Selecteer minimaal één chemische stof om de dubbele Y-as grafiek te tonen.")
+    elif eco_year_dual.empty:
+        st.info("Geen ecologische data beschikbaar voor deze combinatie van filters en seizoenen.")
+    elif chem_year_dual.empty:
+        st.info("Geen chemische data beschikbaar voor deze combinatie van filters en seizoenen.")
+    elif not common_years_dual:
+        st.info("Geen overlappende jaren tussen ecologie en chemie voor deze filtercombinatie.")
+    elif shared_period is None:
+        st.info("Geen gedeelde periode beschikbaar voor chemie vs ecologie.")
+    else:
+        eco_year_dual = eco_year_dual[(eco_year_dual["jaar"] >= int(shared_period[0])) & (eco_year_dual["jaar"] <= int(shared_period[1]))].copy()
+        chem_year_dual = chem_year_dual[(chem_year_dual["jaar"] >= int(shared_period[0])) & (chem_year_dual["jaar"] <= int(shared_period[1]))].copy()
+        if eco_year_dual.empty or chem_year_dual.empty:
+            st.info("Geen chemie- of ecologiedata binnen de gekozen gedeelde periode.")
+        else:
+            fig_dual = make_subplots(specs=[[{"secondary_y": True}]])
+
+            eco_palette = [
+                "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b",
+                "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "#393b79", "#637939",
+            ]
+            chem_palette = [
+                "#111111", "#4c4c4c", "#7f7f7f", "#555555", "#999999",
+            ]
+            chem_dashes = ["dash", "dot", "dashdot", "longdash", "solid"]
+
+            eco_series = sorted(eco_year_dual["serie"].dropna().astype(str).unique().tolist())
+            eco_colors = {s: eco_palette[i % len(eco_palette)] for i, s in enumerate(eco_series)}
+            for serie in eco_series:
+                d = eco_year_dual[eco_year_dual["serie"] == serie].sort_values("jaar")
+                color = eco_colors[serie]
+                if left_display_mode == "Kolommen":
+                    fig_dual.add_trace(
+                        go.Bar(
+                            x=d["jaar"],
+                            y=d["waarde"],
+                            name=serie,
+                            marker_color=color,
+                            opacity=0.82,
+                        ),
+                        secondary_y=False,
+                    )
+                elif left_display_mode == "Gestapeld gebied":
+                    fig_dual.add_trace(
+                        go.Scatter(
+                            x=d["jaar"],
+                            y=d["waarde"],
+                            name=serie,
+                            mode="lines",
+                            line=dict(color=color, width=1.5),
+                            stackgroup="one",
+                        ),
+                        secondary_y=False,
+                    )
+                else:
+                    fig_dual.add_trace(
+                        go.Scatter(
+                            x=d["jaar"],
+                            y=d["waarde"],
+                            name=serie,
+                            mode="lines+markers",
+                            line=dict(color=color, width=2),
+                            marker=dict(size=6),
+                        ),
+                        secondary_y=False,
+                    )
+
+            chem_series_order = [x for x in selected_chems if x in chem_year_dual["serie"].unique().tolist()]
+            for idx, serie in enumerate(chem_series_order):
+                d = chem_year_dual[chem_year_dual["serie"] == serie].sort_values("jaar")
+                if d.empty:
+                    continue
+                unit = ""
+                if "eenheid_omschrijving" in d.columns and not d["eenheid_omschrijving"].dropna().empty:
+                    unit = str(d["eenheid_omschrijving"].dropna().iloc[0])
+                display_name = f"{serie} ({unit})" if unit else serie
+                fig_dual.add_trace(
+                    go.Scatter(
+                        x=d["jaar"],
+                        y=d["chem_value"],
+                        name=display_name,
+                        mode="lines+markers" if show_chem_markers else "lines",
+                        line=dict(color=chem_palette[idx % len(chem_palette)], width=3, dash=chem_dashes[idx % len(chem_dashes)]),
+                        marker=dict(size=7, symbol="diamond"),
+                    ),
+                    secondary_y=True,
+                )
+
+            if left_display_mode == "Kolommen":
+                fig_dual.update_layout(barmode="group")
+
+            left_axis_title = left_metric_dual
+            if left_metric_dual == "KRW score" and krw_mode == "index":
+                left_axis_title = "Gemiddelde KRW-score"
+            elif left_metric_dual == "Kenmerkende soort (N2000)" and n2000_mode == "records":
+                left_axis_title = "Aantal aanwezigheidsrecords"
+            else:
+                left_axis_title = f"{left_metric_dual} / bedekking"
+
+            chem_units = [u for u in chem_year_dual["eenheid_omschrijving"].dropna().astype(str).unique().tolist() if u]
+            right_axis_title = "Concentratie"
+            if len(chem_units) == 1:
+                right_axis_title = f"Concentratie ({chem_units[0]})"
+            elif len(chem_units) > 1:
+                right_axis_title = "Concentratie (eenheidsafhankelijk)"
+
+            season_label = ", ".join(selected_seasons) if selected_seasons else "alle seizoenen"
+            fig_dual.update_layout(
+                title=(
+                    f"Chemie vs {left_metric_dual}<br>"
+                    f"<sup>Ecologie: {', '.join(selected_projects) if selected_projects else 'geen project'} | "
+                    f"{', '.join(selected_bodies) if selected_bodies else 'geen waterlichaam'} — "
+                    f"Chemie: {selected_chem_location or 'geen locatie'} — Seizoen: {season_label}</sup>"
+                ),
+                height=760,
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                xaxis=dict(
+                    title="Jaar",
+                    tickmode="linear",
+                    rangeslider=dict(visible=True),
+                ),
+            )
+            fig_dual.update_yaxes(title_text=left_axis_title, secondary_y=False)
+            fig_dual.update_yaxes(title_text=right_axis_title, secondary_y=True)
+            st.plotly_chart(fig_dual, use_container_width=True)
+            st.caption(
+                f"Seizoenen werken hier alleen op de chemische data; de ecologische bedekking blijft jaarrond zichtbaar. "
+                f"Chemische lijnen tonen per jaar het gemiddelde van de geselecteerde seizoenen. "
+                f"Voor periode {int(shared_period[0])}–{int(shared_period[1])} en seizoen(en) {season_label} "
+                f"wordt hieronder ook per stof het gemiddelde over de gekozen periode samengevat."
+            )
+
+            chem_period_summary = summarize_chemistry_period_average(
+                chem_year_dual,
+                year_min=int(shared_period[0]),
+                year_max=int(shared_period[1]),
+            )
+            if not chem_period_summary.empty:
+                st.markdown("**Gemiddelde chemische concentratie over de gekozen periode en seizoenen**")
+                st.dataframe(
+                    chem_period_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            with st.expander("Jaarreeksen achter de chemie-vs-ecologie grafiek", expanded=False):
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.markdown("**Ecologische reeksen (linker Y-as)**")
+                    st.dataframe(
+                        eco_year_dual.sort_values(["jaar", "serie"]).rename(columns={"serie": "reeks", "waarde": "linker_y"}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                with col_right:
+                    st.markdown("**Chemische reeksen (rechter Y-as)**")
+                    st.dataframe(
+                        chem_year_dual.sort_values(["jaar", "serie"]).rename(columns={"serie": "stof", "chem_value": "rechter_y"}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
 
 # -----------------------------------------------------------------------------
 # BUBBLE PLOT
 # -----------------------------------------------------------------------------
 st.subheader("Relatie doorzicht vs bedekking")
 with st.expander("ℹ️ Hoe komt deze bubble plot tot stand? (toelichting)"):
+    st.caption("De periode van deze bubble plot wordt gestuurd door de gedeelde jaarslider bovenaan de pagina, dezelfde als voor de chemie-vs-ecologie grafiek.")
     st.markdown(
         """
 ### Wat stelt één bubble voor?
@@ -367,25 +724,12 @@ De gekozen periode wordt gefilterd en daarna wordt per soort het gemiddelde geno
 """
     )
 
-df_bubble = _bubble_yearly(df_species_only)
-if df_bubble.empty or df_bubble["jaar"].dropna().empty:
+if df_bubble.empty or df_bubble["jaar"].dropna().empty or shared_period is None:
     st.warning("Geen data beschikbaar voor bubbleplot na filtering.")
 else:
-    min_year = int(df_bubble["jaar"].min())
-    max_year = int(df_bubble["jaar"].max())
-
-    sel_years = st.slider(
-        "Selecteer periode",
-        min_year,
-        max_year,
-        [min_year, max_year],
-        key="ecol_bubble_period",
-    )
-
-    df_bubble_plot = _bubble_period_means(df_bubble, int(sel_years[0]), int(sel_years[1]))
-
+    df_bubble_plot = _bubble_period_means(df_bubble, int(shared_period[0]), int(shared_period[1]))
     if df_bubble_plot.empty:
-        st.warning("Geen data gevonden voor deze filtercombinatie.")
+        st.warning("Geen data gevonden voor deze filtercombinatie of periode.")
     else:
         fig_bubble = px.scatter(
             df_bubble_plot,
@@ -394,7 +738,7 @@ else:
             size="diepte_m",
             hover_name="soort",
             size_max=40,
-            title=f"Ecologische indices ({sel_years[0]} - {sel_years[1]})",
+            title=f"Ecologische indices ({shared_period[0]} - {shared_period[1]})",
             labels={
                 "doorzicht_diepte_ratio": "gem. doorzicht / gem. diepte (-)",
                 "bedekking_pct": "gem. bedekking (%)",
