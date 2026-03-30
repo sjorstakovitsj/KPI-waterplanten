@@ -2513,14 +2513,12 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
 
     mask_nvt = parameter_code.str.upper().eq('NVT')
     stofnaam = np.where(mask_nvt & eenheid_code.eq('mS/m'), 'geleidbaarheid', stofnaam)
-    stofnaam = np.where(mask_nvt & hoedanigheid_code.eq('CaCO3'), 'waterstofcarbonaat', stofnaam)
+    stofnaam = np.where(mask_nvt & hoedanigheid_code.eq('CaCO3'), 'hardheid', stofnaam)
     stofnaam = np.where(mask_nvt & eenheid_code.eq('dm'), 'doorzicht', stofnaam)
     stofnaam = np.where(mask_nvt & eenheid_code.eq('oC'), 'temperatuur', stofnaam)
-    stofnaam = np.where(
-        mask_nvt & eenheid_code.eq('DIMSLS') & df['event_waarde_num'].gt(6) & df['event_waarde_num'].lt(10),
-        'zuurgraad',
-        stofnaam,
-    )
+    stofnaam = np.where(mask_nvt & eenheid_code.eq('/m'), 'extinctie', stofnaam)
+    stofnaam = np.where(mask_nvt & eenheid_code.eq('DIMSLS') & df['event_waarde_num'].lt(3), 'saliniteit', stofnaam)
+    stofnaam = np.where(mask_nvt & eenheid_code.eq('DIMSLS') & df['event_waarde_num'].gt(5), 'zuurgraad', stofnaam)
 
     df['stofnaam'] = pd.Series(stofnaam, index=df.index).astype(str).str.strip()
     df.loc[df['stofnaam'].eq('') & parameter_code.ne(''), 'stofnaam'] = parameter_code[parameter_code.ne('')]
