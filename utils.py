@@ -2170,7 +2170,7 @@ def render_swipe_map_html(
 # =============================================================================
 CHEMISTRY_FILE_PATH = "FC Waterplanten IJG.csv"
 CHEMISTRY_PARQUET = CACHE_DIR / "chemistry_timeseries.parquet"
-CHEMISTRY_PIPELINE_VERSION = "2026-03-29_fc_waterplanten_ijg_robust_v4_hoedanigheid_duckdb"
+CHEMISTRY_PIPELINE_VERSION = "2026-03-30_fc_waterplanten_ijg_eventwaarde_text_hotfix_v2"
 CHEM_PARAM_SUGGESTIONS = ["Ntot", "Ptot", "TOC", "NO3", "NO2", "NH4", "PO4", "CHLFa", "O2", "HCO3"]
 CHEM_LOCATION_PREFERENCES = {
  "Drontermeer": ["drontermeerdijk.km0p4", "reve", "reevediep"],
@@ -2406,6 +2406,22 @@ def _read_chemistry_raw(path: str, required: list[str]) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _clean_chem_numeric_strings(series: pd.Series) -> pd.Series:
+    """Maak numerieke chemie-strings parse-klaar zonder broninformatie te verliezen.
+    Ondersteunt o.a. waarden als '+.1460E+00', komma-decimalen en limietsymbolen.
+    """
+    return (
+        series.fillna('')
+        .astype(str)
+        .str.strip()
+        .str.replace(',', '.', regex=False)
+        .str.replace('<', '', regex=False)
+        .str.replace('>', '', regex=False)
+        .str.replace(r'^\+', '', regex=True)
+        .str.strip()
+    )
+
+
 @st.cache_data(show_spinner=False)
 def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMISTRY_FILE_PATH) -> pd.DataFrame:
     """Interne cached loader met parquet-cache voor grote chemiebestanden."""
@@ -2432,6 +2448,7 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
         'eventdatum',
         'event_datum',
         'event_waarde',
+        'event_waarde_tekst',
         'event_waarde_limietsymbool',
     ]
 
@@ -2451,9 +2468,32 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
 
     # Standaardiseer tijd en numerieke waarde
     df = _add_time_columns(df, 'eventdatum')
-    value_str = df['event_waarde'].fillna('').astype(str).str.replace(',', '.', regex=False).str.strip()
-    value_str_clean = value_str.str.replace('<', '', regex=False).str.replace('>', '', regex=False)
-    df['event_waarde_num'] = pd.to_numeric(value_str_clean, errors='coerce')
+
+    # Gebruik event_waarde_tekst als primaire bron voor numerieke parsing,
+    # omdat dit veld in de bronbestanden vaak de meest precieze representatie
+    # bevat (bijv. '+.1460E+00'), terwijl event_waarde incidenteel decimalen
+    # kan missen of verschuiven (bijv. 146 i.p.v. 0.146).
+    raw_num = pd.to_numeric(
+        _clean_chem_numeric_strings(df.get('event_waarde', pd.Series(np.nan, index=df.index))),
+        errors='coerce',
+    )
+    text_num = pd.to_numeric(
+        _clean_chem_numeric_strings(df.get('event_waarde_tekst', pd.Series(np.nan, index=df.index))),
+        errors='coerce',
+    )
+
+    # Primaire keuze: event_waarde_tekst; fallback: event_waarde.
+    df['event_waarde_num'] = text_num.combine_first(raw_num)
+
+    # Diagnosekolommen voor datakwaliteit / auditing.
+    df['event_waarde_conflict'] = (
+        raw_num.notna()
+        & text_num.notna()
+        & ((raw_num - text_num).abs() > (text_num.abs() * 0.01 + 1e-12))
+    )
+    df['event_waarde_bron'] = np.where(text_num.notna(), 'event_waarde_tekst', 'event_waarde')
+
+    # Veiligheidsgrens voor onrealistische waarden.
     df.loc[df['event_waarde_num'] >= 1e10, 'event_waarde_num'] = np.nan
 
     # Basisvelden / aliases conform gevraagde mapping
@@ -2520,7 +2560,8 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
         'x_coord', 'y_coord', 'parameter_code', 'parameter_omschrijving', 'stofnaam',
         'hoedanigheid_code', 'eenheid_code', 'eenheid_omschrijving', 'eenheid_label', 'eenheid',
         'status_waarde', 'eventdatum', 'datum_bemonstering', 'event_waarde',
-        'event_waarde_limietsymbool', 'event_waarde_num', 'resultaat', 'jaar', 'maand',
+        'event_waarde_limietsymbool', 'event_waarde_num', 'event_waarde_conflict',
+        'event_waarde_bron', 'resultaat', 'jaar', 'maand',
         'seizoen', 'chem_label',
     ]
     for col in keep_cols:

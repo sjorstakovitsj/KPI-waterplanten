@@ -657,7 +657,7 @@ else:
             )
             fig_dual.update_yaxes(title_text=left_axis_title, secondary_y=False)
             fig_dual.update_yaxes(title_text=right_axis_title, secondary_y=True)
-            st.plotly_chart(fig_dual, use_container_width=True)
+            st.plotly_chart(fig_dual, width='stretch')
             st.caption(
                 f"Seizoenen werken hier alleen op de chemische data; de ecologische bedekking blijft jaarrond zichtbaar. "
                 f"Chemische lijnen tonen per jaar het gemiddelde van de geselecteerde seizoenen. "
@@ -674,7 +674,7 @@ else:
                 st.markdown("**Gemiddelde chemische concentratie over de gekozen periode en seizoenen**")
                 st.dataframe(
                     chem_period_summary,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
 
@@ -684,14 +684,14 @@ else:
                     st.markdown("**Ecologische reeksen (linker Y-as)**")
                     st.dataframe(
                         eco_year_dual.sort_values(["jaar", "serie"]).rename(columns={"serie": "reeks", "waarde": "linker_y"}),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                     )
                 with col_right:
                     st.markdown("**Chemische reeksen (rechter Y-as)**")
                     st.dataframe(
                         chem_year_dual.sort_values(["jaar", "serie"]).rename(columns={"serie": "stof", "chem_value": "rechter_y"}),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                     )
 
