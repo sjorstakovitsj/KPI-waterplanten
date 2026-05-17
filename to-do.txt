@@ -17,3 +17,4 @@ temperatuursom kun je gebruiken om de weersinvloed op bedekkingsgraden te koppel
 MM 2019 goed, 2021 invloed markermeerdijken en 2024 weer hersteld
 
 - p2, indeling kleuren totale bedekking aanpassen. Checken bij Dick wat het moet zijn
+- p2, aparte kaart van FC parameters
