@@ -16,31 +16,50 @@ if df.empty:
 st.sidebar.header('Selectiefilters')
 
 WATERLICHAAM_KARAKTERISTIEKEN = {
-    'IJsselmeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot'},
-    'Markermeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot'},
-    'IJmeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot'},
-    'Gouwzee': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot'},
-    'Gooimeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'middel'},
-    'Eemmeer': {'voedselrijkdom': 'zeer rijk', 'diepte': 'ondiep', 'grootte': 'middel'},
-    'Wolderwijd': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel'},
-    'Veluwemeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel'},
-    'Drontermeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'klein'},
+    'IJsselmeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot', 'verblijftijd': 'lang'},
+    'Markermeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot', 'verblijftijd': 'lang'},
+    'IJmeer': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot', 'verblijftijd': 'lang'},
+    'Gouwzee': {'voedselrijkdom': 'matig', 'diepte': 'diep', 'grootte': 'groot', 'verblijftijd': 'lang'},
+    'Gooimeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'kort'},
+    'Eemmeer': {'voedselrijkdom': 'zeer rijk', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'kort'},
+    'Wolderwijd': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
+    'Nuldernauw': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
+    'Veluwemeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
+    'Drontermeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'klein', 'verblijftijd': 'lang'},
     'Vossemeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'klein'},
-    'Ketelmeer': {'voedselrijkdom': 'zeer rijk', 'diepte': 'ondiep', 'grootte': 'middel'},
-    'Zwartemeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'middel'},
+    'Ketelmeer': {'voedselrijkdom': 'zeer rijk', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'kort'},
+    'Zwartemeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'kort'},
 }
 
-voedselrijkdom_filter = st.sidebar.multiselect('Voedselrijkdom', ['matig', 'rijk', 'zeer rijk'], default=['matig', 'rijk', 'zeer rijk'])
-diepte_filter = st.sidebar.multiselect('Diepte', ['diep', 'ondiep'], default=['diep', 'ondiep'])
-grootte_filter = st.sidebar.multiselect('Grootte', ['klein', 'middel', 'groot'], default=['klein', 'middel', 'groot'])
+VOEDSELRIJKDOM_OPTIONS = ['matig', 'rijk', 'zeer rijk']
+DIEPTE_OPTIONS = ['diep', 'ondiep']
+GROOTTE_OPTIONS = ['klein', 'middel', 'groot']
+VERBLIJFTIJD_OPTIONS = ['kort', 'lang']
+
+voedselrijkdom_filter = st.sidebar.multiselect('Voedselrijkdom', VOEDSELRIJKDOM_OPTIONS, default=VOEDSELRIJKDOM_OPTIONS)
+diepte_filter = st.sidebar.multiselect('Diepte', DIEPTE_OPTIONS, default=DIEPTE_OPTIONS)
+grootte_filter = st.sidebar.multiselect('Grootte', GROOTTE_OPTIONS, default=GROOTTE_OPTIONS)
+verblijftijd_filter = st.sidebar.multiselect('Verblijftijd', VERBLIJFTIJD_OPTIONS, default=VERBLIJFTIJD_OPTIONS)
+
+
+def _matches_characteristic(waterbody: str, key: str, selected: list[str], all_values: list[str]) -> bool:
+    """Filtert op karakteristieken. Onbekende waarden blijven alleen zichtbaar als alle opties zijn geselecteerd."""
+    if not selected:
+        return False
+    value = WATERLICHAAM_KARAKTERISTIEKEN.get(waterbody, {}).get(key)
+    if value is None:
+        return set(selected) == set(all_values)
+    return value in selected
+
 
 all_waterbodies = sorted(df['Waterlichaam'].dropna().astype(str).unique()) if 'Waterlichaam' in df.columns else []
 waterbody_options = [
     wb for wb in all_waterbodies
     if wb in WATERLICHAAM_KARAKTERISTIEKEN
-    and WATERLICHAAM_KARAKTERISTIEKEN[wb]['voedselrijkdom'] in voedselrijkdom_filter
-    and WATERLICHAAM_KARAKTERISTIEKEN[wb]['diepte'] in diepte_filter
-    and WATERLICHAAM_KARAKTERISTIEKEN[wb]['grootte'] in grootte_filter
+    and _matches_characteristic(wb, 'voedselrijkdom', voedselrijkdom_filter, VOEDSELRIJKDOM_OPTIONS)
+    and _matches_characteristic(wb, 'diepte', diepte_filter, DIEPTE_OPTIONS)
+    and _matches_characteristic(wb, 'grootte', grootte_filter, GROOTTE_OPTIONS)
+    and _matches_characteristic(wb, 'verblijftijd', verblijftijd_filter, VERBLIJFTIJD_OPTIONS)
 ]
 
 bodies = tuple(st.sidebar.multiselect('Selecteer waterlichaam / waterlichamen', waterbody_options, default=waterbody_options[:1]))
@@ -110,7 +129,6 @@ with st.expander('Hoe worden deze trends berekend?', expanded=False):
 
     Let op: dit is dus geen simpele vergelijking tussen alleen het eerste en laatste jaar. Alle beschikbare jaren in de selectie tellen mee.
     ''')
-
 if species:
     st.info('Let op: de sidebar-soortfilter is actief. Deze analyse gebruikt daardoor alleen de geselecteerde soort.')
 
