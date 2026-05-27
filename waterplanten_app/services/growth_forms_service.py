@@ -127,15 +127,15 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
         trend = _year_total_cover_mean(df)
         if trend.empty:
             return None, 'Geen data beschikbaar voor totale bedekking over de jaren.', ''
-        fig = px.line(trend, x='jaar', y='waarde', markers=True, title='Trend totale bedekking over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Gem. totale bedekking (%)'})
+        fig = px.bar(trend, x='jaar', y='waarde', title='Trend totale bedekking over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Gem. totale bedekking (%)'})
         fig.update_layout(height=420)
         return fig, None, 'Aggregatie: gemiddelde totale bedekking per monstername (CollectieReferentie) per jaar.'
     if trend_mode == 'Groeivormen':
         trend, caption = _compute_growth_trend(df)
         if trend.empty:
             return None, 'Geen data beschikbaar voor groeivormen over de jaren.', ''
-        fig = px.area(trend, x='jaar', y='waarde', color='groeivorm', category_orders={'groeivorm': GROWTH_ORDER}, color_discrete_map=GROWTH_COLORS, title='Trend in groeivormen over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Bedekking (%)', 'groeivorm': 'Groeivorm'})
-        fig.update_layout(height=420, yaxis_title='Bedekking (%)')
+        fig = px.bar(trend, x='jaar', y='waarde', color='groeivorm', category_orders={'groeivorm': GROWTH_ORDER}, color_discrete_map=GROWTH_COLORS, title='Trend in groeivormen over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Bedekking (%)', 'groeivorm': 'Groeivorm'})
+        fig.update_layout(height=420, yaxis_title='Bedekking (%)', barmode='stack')
         return fig, None, caption
     trend, caption = _compute_fraction_trend(df, trend_mode)
     if trend.empty:
@@ -144,8 +144,8 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
     if trend_mode == 'Kenmerkende soorten (N2000)':
         cats = [x for x in trend['categorie'].dropna().astype(str).unique().tolist() if x != 'Geen match']
         order = sorted(cats, key=str.lower) + (['Geen match'] if 'Geen match' in set(trend['categorie'].astype(str)) else [])
-    fig = px.area(trend, x='jaar', y='fractie', color='categorie', category_orders={'categorie': order} if order else None, title=f'Trend in {trend_mode.lower()} over de jaren', labels={'jaar': 'Jaar', 'fractie': 'Fractie van totale bedekking', 'categorie': trend_mode}, color_discrete_sequence=px.colors.qualitative.Safe)
-    fig.update_layout(height=420, yaxis=dict(range=[0, 1], tickformat='.0%'))
+    fig = px.bar(trend, x='jaar', y='fractie', color='categorie', category_orders={'categorie': order} if order else None, title=f'Trend in {trend_mode.lower()} over de jaren', labels={'jaar': 'Jaar', 'fractie': 'Fractie van totale bedekking', 'categorie': trend_mode}, color_discrete_sequence=px.colors.qualitative.Safe)
+    fig.update_layout(height=420, yaxis=dict(range=[0, 1], tickformat='.0%'), barmode='stack')
     extra = 'Bron trofieniveau-indeling: Verhofstad et al. (2025) – Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang. https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf' if trend_mode == 'Trofieniveau' else ''
     full_caption = caption + ('\n' + extra if extra else '')
     return fig, None, full_caption
