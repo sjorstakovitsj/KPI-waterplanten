@@ -1,11 +1,5 @@
 import streamlit as st
 
-try:
-    # In deze projectstructuur staat utils.py in de root naast dit page-script.
-    from utils import build_bathymetry_legend_url
-except Exception:
-    # Fallback voor installaties waar utils binnen het package staat.
-    from waterplanten_app.utils import build_bathymetry_legend_url
 from waterplanten_app.domain.contracts import (
     ANALYSIS_LEVEL_GROUPS_AGGREGATIONS,
     ANALYSIS_LEVEL_OPTIONS,
@@ -14,10 +8,7 @@ from waterplanten_app.domain.contracts import (
     LAYER_MODE_OPTIONS,
 )
 from waterplanten_app.ui.filters import select_projects, select_year
-from waterplanten_app.ui.legends import (
-    render_bathymetry_legend,
-    render_spatial_legend,
-)
+from waterplanten_app.ui.legends import render_spatial_legend
 from waterplanten_app.ui.maps import render_spatial_map
 from waterplanten_app.ui.tables import render_spatial_table
 from waterplanten_app.pipelines.spatial_page_pipeline import (
@@ -71,7 +62,6 @@ def main() -> None:
 
     render_spatial_legend(result)
     render_spatial_map(result, chem_points, filtered_base_data=page_state.filtered_base_data)
-    render_bathymetry_legend(build_bathymetry_legend_url())
 
     if (
         result.analysis_level == ANALYSIS_LEVEL_GROUPS_AGGREGATIONS
