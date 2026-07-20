@@ -628,6 +628,7 @@ def get_chem_ecology_timeseries(
     definitive_only: bool = False,
     seasons: tuple[str, ...] = tuple(),
     top_n: int | None = None,
+    restrict_to_common_years: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int]]:
     eco_year = aggregate_ecology_yearly(
         df_eco=df_eco,
@@ -645,17 +646,20 @@ def get_chem_ecology_timeseries(
         definitive_only=definitive_only,
         seasons=seasons,
     )
-    if eco_year.empty or chem_year.empty:
-        return eco_year, chem_year, []
-    common_years = sorted(
-        set(pd.to_numeric(eco_year['jaar'], errors='coerce').dropna().astype(int))
-        & set(pd.to_numeric(chem_year['jaar'], errors='coerce').dropna().astype(int))
-    )
-    if not common_years:
-        return eco_year.iloc[0:0].copy(), chem_year.iloc[0:0].copy(), []
-    eco_year = eco_year[eco_year['jaar'].isin(common_years)].copy()
-    chem_year = chem_year[chem_year['jaar'].isin(common_years)].copy()
-    return eco_year, chem_year, common_years
+    eco_years = set(pd.to_numeric(eco_year.get('jaar'), errors='coerce').dropna().astype(int)) if not eco_year.empty else set()
+    chem_years = set(pd.to_numeric(chem_year.get('jaar'), errors='coerce').dropna().astype(int)) if not chem_year.empty else set()
+
+    if restrict_to_common_years:
+        common_years = sorted(eco_years & chem_years)
+        if not common_years:
+            return eco_year.iloc[0:0].copy(), chem_year.iloc[0:0].copy(), []
+        eco_year = eco_year[eco_year['jaar'].isin(common_years)].copy()
+        chem_year = chem_year[chem_year['jaar'].isin(common_years)].copy()
+        return eco_year, chem_year, common_years
+
+    # Beide monitoringsreeksen blijven onafhankelijk van elkaar beschikbaar.
+    available_years = sorted(eco_years | chem_years)
+    return eco_year, chem_year, available_years
 
 
 __all__ = [

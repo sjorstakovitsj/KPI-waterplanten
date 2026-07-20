@@ -11,6 +11,29 @@ from waterplanten_app.domain.contracts import DashboardFilters
 
 GROWTH_ORDER = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
 GROWTH_COLORS = {"Ondergedoken": "#2ca02c", "Drijvend": "#1f77b4", "Emergent": "#ff7f0e", "Draadalgen": "#d62728", "FLAB": "#7f7f7f", "Kroos": "#bcbd22"}
+AXIS_FONT_SIZE = 16
+AXIS_FONT_COLOR = "black"
+
+
+def _style_axis_text(fig):
+    """Maak as-titels en maatstreep-labels groter en zwart."""
+    fig.update_xaxes(
+        title_font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+        tickfont=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+    )
+    fig.update_yaxes(
+        title_font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+        tickfont=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+    )
+    fig.update_layout(
+        legend=dict(
+            font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+            title_font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
+        )
+    )
+    return fig
+
+
 PREFERRED_ORDERS = {
     "KRW score": ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)", "Geen match"],
     "Trofieniveau": ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend", "Geen match"],
@@ -129,6 +152,7 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
             return None, 'Geen data beschikbaar voor totale bedekking over de jaren.', ''
         fig = px.bar(trend, x='jaar', y='waarde', title='Trend totale bedekking over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Gem. totale bedekking (%)'})
         fig.update_layout(height=420)
+        _style_axis_text(fig)
         return fig, None, 'Aggregatie: gemiddelde totale bedekking per monstername (CollectieReferentie) per jaar.'
     if trend_mode == 'Groeivormen':
         trend, caption = _compute_growth_trend(df)
@@ -136,6 +160,7 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
             return None, 'Geen data beschikbaar voor groeivormen over de jaren.', ''
         fig = px.bar(trend, x='jaar', y='waarde', color='groeivorm', category_orders={'groeivorm': GROWTH_ORDER}, color_discrete_map=GROWTH_COLORS, title='Trend in groeivormen over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Bedekking (%)', 'groeivorm': 'Groeivorm'})
         fig.update_layout(height=420, yaxis_title='Bedekking (%)', barmode='stack')
+        _style_axis_text(fig)
         return fig, None, caption
     trend, caption = _compute_fraction_trend(df, trend_mode)
     if trend.empty:
@@ -146,6 +171,7 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
         order = sorted(cats, key=str.lower) + (['Geen match'] if 'Geen match' in set(trend['categorie'].astype(str)) else [])
     fig = px.bar(trend, x='jaar', y='fractie', color='categorie', category_orders={'categorie': order} if order else None, title=f'Trend in {trend_mode.lower()} over de jaren', labels={'jaar': 'Jaar', 'fractie': 'Fractie van totale bedekking', 'categorie': trend_mode}, color_discrete_sequence=px.colors.qualitative.Safe)
     fig.update_layout(height=420, yaxis=dict(range=[0, 1], tickformat='.0%'), barmode='stack')
+    _style_axis_text(fig)
     extra = 'Bron trofieniveau-indeling: Verhofstad et al. (2025) – Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang. https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf' if trend_mode == 'Trofieniveau' else ''
     full_caption = caption + ('\n' + extra if extra else '')
     return fig, None, full_caption
@@ -166,6 +192,7 @@ def build_species_group_view(filters: DashboardFilters):
     trend.loc[mask, 'fractie_tov_totaal'] = trend.loc[mask, 'bedekkingsgraad_proc'] / trend.loc[mask, 'totaal_bedekking_jaar']
     fig = px.bar(trend, x='jaar', y='fractie_tov_totaal', color='soortgroep', title='Samenstelling soortgroepen t.o.v. totale bedekking (WATPTN)', labels={'fractie_tov_totaal': 'Fractie van totale bedekking', 'jaar': 'Jaar', 'soortgroep': 'Groep'}, color_discrete_sequence=px.colors.qualitative.Safe, height=500)
     fig.update_layout(yaxis=dict(range=[0, 1]))
+    _style_axis_text(fig)
     overig = mapped[mapped['soortgroep'] == 'Overig / Individueel']
     missing = None if overig.empty else overig.groupby('soort', as_index=False).agg(Aantal_Metingen=('bedekkingsgraad_proc', 'count'), Max_Bedekking=('bedekkingsgraad_proc', 'max')).sort_values('Max_Bedekking', ascending=False)
     return fig, missing, None

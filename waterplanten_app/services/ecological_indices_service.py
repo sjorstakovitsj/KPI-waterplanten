@@ -80,18 +80,20 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
     if not chemistry_labels:
         return None, None, None, None, 'Selecteer minimaal één chemische stof om de dubbele Y-as grafiek te tonen.'
     eco_mode = krw_mode if left_metric == 'KRW score' else (n2000_mode if left_metric == 'Kenmerkende soort (N2000)' else 'default')
-    eco_year, chem_year, common_years = get_chem_ecology_timeseries(df_eco=df_eco, df_chem=df_chem, project_sel=projects, body_sel=bodies, ecology_metric=left_metric, chemistry_labels=chemistry_labels, chemistry_location=chemistry_location, ecology_mode=eco_mode, definitive_only=False, seasons=seasons, top_n=top_n)
-    if eco_year.empty or chem_year.empty or not common_years:
-        return None, eco_year, chem_year, None, 'Geen overlappende jaren tussen ecologie en chemie voor deze filtercombinatie.'
+    left_metric_display = 'Bedekking ondergedoken waterplanten (zie bij groeivormen)' if left_metric == 'Totale bedekking' else left_metric
+    eco_year, chem_year, common_years = get_chem_ecology_timeseries(df_eco=df_eco, df_chem=df_chem, project_sel=projects, body_sel=bodies, ecology_metric=left_metric, chemistry_labels=chemistry_labels, chemistry_location=chemistry_location, ecology_mode=eco_mode, definitive_only=False, seasons=seasons, top_n=top_n, restrict_to_common_years=False)
+    if chem_year.empty or not common_years:
+        return None, eco_year, chem_year, None, 'Geen chemiedata beschikbaar voor deze filtercombinatie.'
     eco_year = eco_year[(eco_year['jaar'] >= int(period[0])) & (eco_year['jaar'] <= int(period[1]))].copy(); chem_year = chem_year[(chem_year['jaar'] >= int(period[0])) & (chem_year['jaar'] <= int(period[1]))].copy()
-    if eco_year.empty or chem_year.empty:
-        return None, eco_year, chem_year, None, 'Geen chemie- of ecologiedata binnen de gekozen gedeelde periode.'
+    if chem_year.empty:
+        return None, eco_year, chem_year, None, 'Geen chemiedata binnen de gekozen periode.'
     fig = make_subplots(specs=[[{'secondary_y': True}]])
     eco_palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#393b79', '#637939']
     chem_palette = ['#111111', '#4c4c4c', '#7f7f7f', '#555555', '#999999']; chem_dashes = ['dash', 'dot', 'dashdot', 'longdash', 'solid']
     for i, serie in enumerate(sorted(eco_year['serie'].dropna().astype(str).unique().tolist())):
         d = eco_year[eco_year['serie'] == serie].sort_values('jaar'); color = eco_palette[i % len(eco_palette)]
-        trace = go.Bar(x=d['jaar'], y=d['waarde'], name=serie, marker_color=color, opacity=0.82) if display_mode == 'Kolommen' else go.Scatter(x=d['jaar'], y=d['waarde'], name=serie, mode='lines' if display_mode == 'Gestapeld gebied' else 'lines+markers', line=dict(color=color, width=1.5 if display_mode == 'Gestapeld gebied' else 2), marker=dict(size=6), stackgroup='one' if display_mode == 'Gestapeld gebied' else None)
+        serie_display = left_metric_display if left_metric == 'Totale bedekking' and serie == 'Totale bedekking' else serie
+        trace = go.Bar(x=d['jaar'], y=d['waarde'], name=serie_display, marker_color=color, opacity=0.82) if display_mode == 'Kolommen' else go.Scatter(x=d['jaar'], y=d['waarde'], name=serie_display, mode='lines' if display_mode == 'Gestapeld gebied' else 'lines+markers', line=dict(color=color, width=1.5 if display_mode == 'Gestapeld gebied' else 2), marker=dict(size=6), stackgroup='one' if display_mode == 'Gestapeld gebied' else None)
         fig.add_trace(trace, secondary_y=False)
     for i, serie in enumerate([x for x in chemistry_labels if x in chem_year['serie'].unique().tolist()]):
         d = chem_year[chem_year['serie'] == serie].sort_values('jaar')
@@ -99,12 +101,27 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
             continue
         unit = '' if 'eenheid_omschrijving' not in d.columns or d['eenheid_omschrijving'].dropna().empty else str(d['eenheid_omschrijving'].dropna().iloc[0])
         fig.add_trace(go.Scatter(x=d['jaar'], y=d['chem_value'], name=f'{serie} ({unit})' if unit else serie, mode='lines+markers' if show_markers else 'lines', line=dict(color=chem_palette[i % len(chem_palette)], width=3, dash=chem_dashes[i % len(chem_dashes)]), marker=dict(size=7, symbol='diamond')), secondary_y=True)
-    left_title = 'Gemiddelde KRW-score' if left_metric == 'KRW score' and krw_mode == 'index' else ('Aantal aanwezigheidsrecords' if left_metric == 'Kenmerkende soort (N2000)' and n2000_mode == 'records' else f'{left_metric} / bedekking')
+    left_title = 'Gemiddelde KRW-score' if left_metric == 'KRW score' and krw_mode == 'index' else ('Aantal aanwezigheidsrecords' if left_metric == 'Kenmerkende soort (N2000)' and n2000_mode == 'records' else (left_metric_display if left_metric == 'Totale bedekking' else f'{left_metric} / bedekking'))
     units = [u for u in chem_year.get('eenheid_omschrijving', pd.Series(dtype='object')).dropna().astype(str).unique().tolist() if u]
     right_title = f'Concentratie ({units[0]})' if len(units) == 1 else ('Concentratie (eenheidsafhankelijk)' if len(units) > 1 else 'Concentratie')
     season_label = ', '.join(seasons) if seasons else 'alle seizoenen'
-    fig.update_layout(title=f"Chemie vs {left_metric}<br><sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>", height=760, hovermode='x unified', legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0), xaxis=dict(title='Jaar', tickmode='linear', rangeslider=dict(visible=True)), barmode='group' if display_mode == 'Kolommen' else None)
-    fig.update_yaxes(title_text=left_title, secondary_y=False); fig.update_yaxes(title_text=right_title, secondary_y=True)
+    fig.update_layout(title=f"Chemie vs {left_metric_display}<br><sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>", height=760, hovermode='x unified', legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0), xaxis=dict(title='Jaar', tickmode='linear', rangeslider=dict(visible=True)), barmode='group' if display_mode == 'Kolommen' else None)
+    fig.update_xaxes(
+        title_font=dict(color='black'),
+        tickfont=dict(color='black'),
+    )
+    fig.update_yaxes(
+        title_text=left_title,
+        title_font=dict(color='black'),
+        tickfont=dict(color='black'),
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text=right_title,
+        title_font=dict(color='black'),
+        tickfont=dict(color='black'),
+        secondary_y=True,
+    )
     summary = summarize_chemistry_period_average(chem_year, year_min=int(period[0]), year_max=int(period[1]))
     return fig, eco_year, chem_year, summary, None
 
