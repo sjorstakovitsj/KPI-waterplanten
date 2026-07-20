@@ -12,8 +12,8 @@ if df.empty:
     st.error('Geen data geladen.')
     st.stop()
 st.sidebar.header('Selectie filters')
-projects = select_projects(df)
-bodies = select_waterbodies(df, projects, 'Selecteer waterlichaam')
+projects = select_projects(df, default=('KRW',))
+bodies = select_waterbodies(df, projects, 'Selecteer waterlichaam', default=('IJsselmeer',))
 years = get_shared_years(projects, bodies)
 period = None if not years else tuple(st.slider('Selecteer periode (voor chemie vs ecologie én bubble plot)', int(min(years)), int(max(years)), [int(min(years)), int(max(years))], key='ecol_shared_period'))
 
@@ -24,7 +24,9 @@ else:
     st.sidebar.markdown('---'); st.sidebar.subheader('Chemie vs bedekking')
     options, default_loc, required = get_preferred_chemistry_locations(bodies, get_available_chemistry_locations(df_chem))
     options = options or get_available_chemistry_locations(df_chem)
-    location = st.sidebar.selectbox('Meetlocatie chemie', options=options, index=(options.index(default_loc) if default_loc in options else None), key='chem_vs_eco_location', placeholder='Kies een meetlocatie') if options else None
+    preferred_location = next((x for x in options if str(x).strip().casefold() == 'vrouwezand'), None)
+    selected_location = preferred_location or (default_loc if default_loc in options else None)
+    location = st.sidebar.selectbox('Meetlocatie chemie', options=options, index=(options.index(selected_location) if selected_location in options else None), key='chem_vs_eco_location', placeholder='Kies een meetlocatie') if options else None
     labels = get_available_chemistry_parameter_labels(df_chem)
     preferred = [x for code in CHEM_PARAM_SUGGESTIONS for x in labels if str(x).startswith(f'{code} ') or str(x) == code or str(x).startswith(f'{code}—') or str(x).startswith(f'{code} —')]
     chems = tuple(st.sidebar.multiselect('Selecteer stof(fen) (max. 5)', options=labels, default=(preferred[:2] if preferred else labels[:1]), key='chem_vs_eco_params', max_selections=5)[:5])

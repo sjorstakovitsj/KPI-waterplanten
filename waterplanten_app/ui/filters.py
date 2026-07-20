@@ -9,15 +9,28 @@ def select_year(df: pd.DataFrame, label: str, *, reverse: bool = True) -> int:
     return int(st.sidebar.selectbox(label, years))
 
 
-def select_projects(df: pd.DataFrame, label: str = 'Selecteer project(en)') -> tuple[str, ...]:
+def select_projects(
+    df: pd.DataFrame,
+    label: str = 'Selecteer project(en)',
+    *,
+    default: tuple[str, ...] | list[str] | None = None,
+) -> tuple[str, ...]:
     projects = sorted(df['Project'].dropna().astype(str).unique().tolist())
-    return tuple(st.sidebar.multiselect(label, options=projects, default=projects))
+    selected_default = projects if default is None else [x for x in default if x in projects]
+    return tuple(st.sidebar.multiselect(label, options=projects, default=selected_default))
 
 
-def select_waterbodies(df: pd.DataFrame, projects: tuple[str, ...], label: str = 'Selecteer waterlichaam / waterlichamen') -> tuple[str, ...]:
+def select_waterbodies(
+    df: pd.DataFrame,
+    projects: tuple[str, ...],
+    label: str = 'Selecteer waterlichaam / waterlichamen',
+    *,
+    default: tuple[str, ...] | list[str] | None = None,
+) -> tuple[str, ...]:
     scoped = df[df['Project'].isin(projects)] if projects else df
     bodies = sorted(scoped['Waterlichaam'].dropna().astype(str).unique().tolist())
-    return tuple(st.sidebar.multiselect(label, options=bodies, default=bodies))
+    selected_default = bodies if default is None else [x for x in default if x in bodies]
+    return tuple(st.sidebar.multiselect(label, options=bodies, default=selected_default))
 
 
 def select_year_range(df: pd.DataFrame, label: str, *, default_last_n: int = 10) -> tuple[int, int]:
