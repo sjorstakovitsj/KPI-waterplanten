@@ -15,8 +15,6 @@ SPECIES_TREND_ORDER = [
     "Overig",
     "Sterkranswier",
     "Kransblad",
-    "Zannichellia",
-    "Snavelruppia",
     "Tenger fonteinkruid",
     "Schedefonteinkruid",
     "Doorgroeid fonteinkruid",
@@ -33,12 +31,9 @@ SPECIES_TREND_EXACT_ALIASES = {
     'Stuckenia pectinata': "Schedefonteinkruid",
     'Potamogeton perfoliatus': "Doorgroeid fonteinkruid",
     'Elodea nuttallii': "Smalle waterpest",
-    'Ruppia maritima': "Snavelruppia",
     # Nederlandse aliassen blijven ondersteund als die in een bronbestand voorkomen.
     "sterkranswier": "Sterkranswier",
     "kransblad": "Kransblad",
-    "zannichellia": "Zannichellia",
-    "snavelruppia": "Snavelruppia",
     "tenger fonteinkruid": "Tenger fonteinkruid",
     "schedefonteinkruid": "Schedefonteinkruid",
     "doorgroeid fonteinkruid": "Doorgroeid fonteinkruid",
@@ -53,16 +48,25 @@ SPECIES_TREND_NORMALIZED_ALIASES = {
 }
 
 
+# Duurzame presentatieregel: alle Zannichellia- en Ruppia-taxa vallen altijd
+# onder Overig. De regel wordt vóór de aliaslookup toegepast en heeft dus
+# voorrang op eventuele toekomstige aliases.
+SPECIES_TREND_FORCE_OVERIG_PREFIXES = ('zannichellia', 'ruppia')
+
+
 def _classify_species_for_trend(value) -> str:
     """Deel een bronsoort in zonder de algemene taxonomy-mapping te wijzigen."""
     name = str(value or '').strip().casefold()
     if not name:
         return 'Overig'
+    if any(
+        name == prefix or name.startswith(f'{prefix} ')
+        for prefix in SPECIES_TREND_FORCE_OVERIG_PREFIXES
+    ):
+        return 'Overig'
     exact = SPECIES_TREND_NORMALIZED_ALIASES.get(name)
     if exact:
         return exact
-    if name.startswith('zannichellia'):
-        return 'Zannichellia'
     # Alle Chara-, Nitella- en Tolypella-taxa worden als Kransblad getoond;
     # Nitellopsis obtusa is hierboven eerst apart als Sterkranswier afgevangen.
     if name == 'chara' or name.startswith('chara '):
@@ -76,8 +80,6 @@ SPECIES_TREND_COLORS = {
     "Overig": "#9e9e9e",
     "Sterkranswier": "#1f77b4",
     "Kransblad": "#8ecae6",
-    "Zannichellia": "#c69200",
-    "Snavelruppia": "#666666",
     "Tenger fonteinkruid": "#64c832",
     "Schedefonteinkruid": "#f2c94c",
     "Doorgroeid fonteinkruid": "#8c6d31",
