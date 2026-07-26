@@ -13,8 +13,17 @@ if df.empty:
     st.error('Geen data geladen. Controleer het bronbestand.')
     st.stop()
 st.sidebar.header('Filters')
-projects = select_projects(df)
-filters = DashboardFilters(year=select_year(df, 'Selecteer meetjaar'), projects=projects, waterbodies=select_waterbodies(df, projects))
+
+projects = select_projects(df, default=('KRW',))
+filters = DashboardFilters(
+    year=select_year(df, 'Selecteer meetjaar', default=2025),
+    projects=projects,
+    waterbodies=select_waterbodies(
+        df,
+        projects,
+        default=('IJsselmeer',),
+    ),
+)
 st.subheader('Trend over de jaren')
 trend_mode = st.selectbox('Kies trendweergave', ['Groeivormen', 'Totale bedekking', 'KRW score', 'Trofieniveau', 'Soortgroepen', 'Kenmerkende soorten (N2000)'], index=0, key='trend_mode_choice')
 fig, msg, caption = build_trend_figure(filters, trend_mode)

@@ -4,9 +4,19 @@ import pandas as pd
 import streamlit as st
 
 
-def select_year(df: pd.DataFrame, label: str, *, reverse: bool = True) -> int:
-    years = sorted(pd.to_numeric(df['jaar'], errors='coerce').dropna().astype(int).unique().tolist(), reverse=reverse)
-    return int(st.sidebar.selectbox(label, years))
+def select_year(
+    df: pd.DataFrame,
+    label: str,
+    *,
+    reverse: bool = True,
+    default: int | None = None,
+) -> int:
+    years = sorted(
+        pd.to_numeric(df['jaar'], errors='coerce').dropna().astype(int).unique().tolist(),
+        reverse=reverse,
+    )
+    index = years.index(int(default)) if default is not None and int(default) in years else 0
+    return int(st.sidebar.selectbox(label, years, index=index))
 
 
 def select_projects(
