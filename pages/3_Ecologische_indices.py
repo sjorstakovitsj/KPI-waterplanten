@@ -5,6 +5,31 @@ from waterplanten_app.ui.charts import render_plot
 from waterplanten_app.ui.filters import select_projects, select_waterbodies
 
 st.set_page_config(layout='wide')
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] [data-baseweb="select"] div,
+    section[data-testid="stSidebar"] [data-baseweb="tag"],
+    section[data-testid="stSidebar"] [role="radiogroup"] label,
+    section[data-testid="stSidebar"] [data-testid="stSlider"] div {
+        font-size: 18px !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="tag"] span {
+        font-size: 17px !important;
+    }
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        font-size: 22px !important;
+    }
+    div[data-baseweb="popover"] [role="option"] {
+        font-size: 18px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title('🌿 Ecologische indices')
 
 df = load_data()

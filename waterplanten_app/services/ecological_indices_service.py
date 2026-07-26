@@ -105,21 +105,48 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
     units = [u for u in chem_year.get('eenheid_omschrijving', pd.Series(dtype='object')).dropna().astype(str).unique().tolist() if u]
     right_title = f'Concentratie ({units[0]})' if len(units) == 1 else ('Concentratie (eenheidsafhankelijk)' if len(units) > 1 else 'Concentratie')
     season_label = ', '.join(seasons) if seasons else 'alle seizoenen'
-    fig.update_layout(title=f"Chemie vs {left_metric_display}<br><sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>", height=760, hovermode='x unified', legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0), xaxis=dict(title='Jaar', tickmode='linear', rangeslider=dict(visible=True)), barmode='group' if display_mode == 'Kolommen' else None)
+    fig.update_layout(
+        title=dict(
+            text=f"Chemie vs {left_metric_display}<br><sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>",
+            font=dict(size=22, color='black'),
+            x=0.01,
+            xanchor='left',
+            y=0.98,
+            yanchor='top',
+        ),
+        height=800,
+        margin=dict(l=90, r=430, t=105, b=80),
+        hovermode='x unified',
+        font=dict(size=17, color='black'),
+        legend=dict(
+            orientation='v',
+            yanchor='top',
+            y=1.0,
+            xanchor='left',
+            x=1.02,
+            font=dict(size=16, color='black'),
+            title_font=dict(size=17, color='black'),
+            bgcolor='rgba(255,255,255,0.92)',
+            bordercolor='rgba(0,0,0,0.20)',
+            borderwidth=1,
+        ),
+        xaxis=dict(title='Jaar', tickmode='linear', rangeslider=dict(visible=True)),
+        barmode='group' if display_mode == 'Kolommen' else None,
+    )
     fig.update_xaxes(
-        title_font=dict(color='black'),
-        tickfont=dict(color='black'),
+        title_font=dict(size=19, color='black'),
+        tickfont=dict(size=17, color='black'),
     )
     fig.update_yaxes(
         title_text=left_title,
-        title_font=dict(color='black'),
-        tickfont=dict(color='black'),
+        title_font=dict(size=19, color='black'),
+        tickfont=dict(size=17, color='black'),
         secondary_y=False,
     )
     fig.update_yaxes(
         title_text=right_title,
-        title_font=dict(color='black'),
-        tickfont=dict(color='black'),
+        title_font=dict(size=19, color='black'),
+        tickfont=dict(size=17, color='black'),
         secondary_y=True,
     )
     summary = summarize_chemistry_period_average(chem_year, year_min=int(period[0]), year_max=int(period[1]))

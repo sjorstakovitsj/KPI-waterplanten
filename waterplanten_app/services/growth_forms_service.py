@@ -11,6 +11,204 @@ from waterplanten_app.domain.contracts import DashboardFilters
 
 GROWTH_ORDER = ["Ondergedoken", "Drijvend", "Emergent", "Draadalgen", "Kroos", "FLAB"]
 GROWTH_COLORS = {"Ondergedoken": "#2ca02c", "Drijvend": "#1f77b4", "Emergent": "#ff7f0e", "Draadalgen": "#d62728", "FLAB": "#7f7f7f", "Kroos": "#bcbd22"}
+SPECIES_TREND_ORDER = [
+    "Overig",
+    "Sterkranswier",
+    "Kransblad",
+    "Zannichellia",
+    "Snavelruppia",
+    "Tenger fonteinkruid",
+    "Schedefonteinkruid",
+    "Doorgroeid fonteinkruid",
+    "Smalle waterpest",
+]
+
+# De bronkolom 'soort' bevat hoofdzakelijk wetenschappelijke namen. Deze lokale
+# aliasmapping geldt uitsluitend voor Trend over de jaren -> Soortgroepen en
+# verandert de centrale taxonomische indeling voor andere grafieken niet.
+SPECIES_TREND_EXACT_ALIASES = {
+    'Nitellopsis obtusa': "Sterkranswier",
+    'Potamogeton pusillus': "Tenger fonteinkruid",
+    'Potamogeton pectinatus': "Schedefonteinkruid",
+    'Stuckenia pectinata': "Schedefonteinkruid",
+    'Potamogeton perfoliatus': "Doorgroeid fonteinkruid",
+    'Elodea nuttallii': "Smalle waterpest",
+    'Ruppia maritima': "Snavelruppia",
+    # Nederlandse aliassen blijven ondersteund als die in een bronbestand voorkomen.
+    "sterkranswier": "Sterkranswier",
+    "kransblad": "Kransblad",
+    "zannichellia": "Zannichellia",
+    "snavelruppia": "Snavelruppia",
+    "tenger fonteinkruid": "Tenger fonteinkruid",
+    "schedefonteinkruid": "Schedefonteinkruid",
+    "doorgroeid fonteinkruid": "Doorgroeid fonteinkruid",
+    "smalle waterpest": "Smalle waterpest",
+}
+
+
+# Houd de leesbare aliasnamen intact, maar vergelijk hoofdletterongevoelig.
+SPECIES_TREND_NORMALIZED_ALIASES = {
+    species_name.strip().casefold(): category
+    for species_name, category in SPECIES_TREND_EXACT_ALIASES.items()
+}
+
+
+def _classify_species_for_trend(value) -> str:
+    """Deel een bronsoort in zonder de algemene taxonomy-mapping te wijzigen."""
+    name = str(value or '').strip().casefold()
+    if not name:
+        return 'Overig'
+    exact = SPECIES_TREND_NORMALIZED_ALIASES.get(name)
+    if exact:
+        return exact
+    if name.startswith('zannichellia'):
+        return 'Zannichellia'
+    # Alle Chara-, Nitella- en Tolypella-taxa worden als Kransblad getoond;
+    # Nitellopsis obtusa is hierboven eerst apart als Sterkranswier afgevangen.
+    if name == 'chara' or name.startswith('chara '):
+        return 'Kransblad'
+    if name == 'nitella' or name.startswith('nitella '):
+        return 'Kransblad'
+    if name == 'tolypella' or name.startswith('tolypella '):
+        return 'Kransblad'
+    return 'Overig'
+SPECIES_TREND_COLORS = {
+    "Overig": "#9e9e9e",
+    "Sterkranswier": "#1f77b4",
+    "Kransblad": "#8ecae6",
+    "Zannichellia": "#c69200",
+    "Snavelruppia": "#666666",
+    "Tenger fonteinkruid": "#64c832",
+    "Schedefonteinkruid": "#f2c94c",
+    "Doorgroeid fonteinkruid": "#8c6d31",
+    "Smalle waterpest": "#2ca02c",
+}
+
+
+def _compute_absolute_species_group_trend(df_in: pd.DataFrame):
+    """Verdeel de totale bedekking per monstername over de soortcategorieen.
+
+    De relatieve soortverdeling wordt per CollectieReferentie berekend uit de
+    individuele soortbedekkingen. Die verdeling wordt vervolgens geschaald naar
+    totaal_bedekking_locatie. Daardoor is de som van de categorieen per jaar
+    exact gelijk aan de grafiek Totale bedekking.
+    """
+    required = {'jaar', 'CollectieReferentie', 'soort', 'totaal_bedekking_locatie'}
+    if df_in.empty or not required.issubset(df_in.columns):
+        return pd.DataFrame(columns=['jaar', 'categorie', 'waarde']), ''
+
+    # Gebruik exact dezelfde monsterbasis als _year_total_cover_mean(): per
+    # jaar en CollectieReferentie eenmaal de officiele totale bedekking.
+    sample_totals = (
+        df_in.groupby(['jaar', 'CollectieReferentie'], as_index=False)
+        ['totaal_bedekking_locatie']
+        .first()
+        .rename(columns={'totaal_bedekking_locatie': 'sample_total'})
+    )
+    sample_totals['sample_total'] = (
+        pd.to_numeric(sample_totals['sample_total'], errors='coerce')
+        .fillna(0)
+        .clip(lower=0)
+    )
+    if sample_totals.empty:
+        return pd.DataFrame(columns=['jaar', 'categorie', 'waarde']), ''
+
+    df_species = df_in[
+        (df_in['type'] == 'Soort')
+        & (~df_in['soort'].isin(RWS_GROEIVORM_CODES))
+    ].copy()
+
+    if not df_species.empty:
+        # Classificeer uitsluitend op de wetenschappelijke bronkolom 'soort'.
+        species_name = df_species['soort'].fillna('').astype(str).str.strip()
+        df_species['categorie'] = species_name.apply(_classify_species_for_trend)
+
+        value_source = (
+            df_species['bedekkingsgraad_proc']
+            if 'bedekkingsgraad_proc' in df_species.columns
+            else df_species['bedekking_pct']
+        )
+        df_species['raw_value'] = (
+            pd.to_numeric(value_source, errors='coerce')
+            .fillna(0)
+            .clip(lower=0)
+        )
+        per_sample_category = (
+            df_species.groupby(
+                ['jaar', 'CollectieReferentie', 'categorie'],
+                as_index=False,
+            )['raw_value']
+            .sum()
+        )
+    else:
+        per_sample_category = pd.DataFrame(
+            columns=['jaar', 'CollectieReferentie', 'categorie', 'raw_value']
+        )
+
+    # Maak voor elke monstername alle vaste categorieen aan. Dit houdt de
+    # legenda compleet en neemt afwezige categorieen als nul mee in het jaarmean.
+    sample_grid = (
+        sample_totals[['jaar', 'CollectieReferentie']]
+        .assign(_key=1)
+        .merge(
+            pd.DataFrame({'categorie': SPECIES_TREND_ORDER, '_key': 1}),
+            on='_key',
+            how='inner',
+        )
+        .drop(columns='_key')
+    )
+    scaled = sample_grid.merge(
+        per_sample_category,
+        on=['jaar', 'CollectieReferentie', 'categorie'],
+        how='left',
+    )
+    scaled['raw_value'] = pd.to_numeric(
+        scaled['raw_value'], errors='coerce'
+    ).fillna(0.0)
+    scaled = scaled.merge(
+        sample_totals,
+        on=['jaar', 'CollectieReferentie'],
+        how='left',
+    )
+
+    raw_totals = (
+        scaled.groupby(['jaar', 'CollectieReferentie'])['raw_value']
+        .transform('sum')
+    )
+    scaled['waarde'] = 0.0
+    has_distribution = raw_totals > 0
+    scaled.loc[has_distribution, 'waarde'] = (
+        scaled.loc[has_distribution, 'raw_value']
+        / raw_totals.loc[has_distribution]
+        * scaled.loc[has_distribution, 'sample_total']
+    )
+
+    # Als een monstername wel totale bedekking maar geen bruikbare soortwaarden
+    # heeft, plaats de totale bedekking onder Overig. Zo blijft de totaalsom ook
+    # voor die monstername exact gelijk aan totaal_bedekking_locatie.
+    no_distribution_overig = (~has_distribution) & scaled['categorie'].eq('Overig')
+    scaled.loc[no_distribution_overig, 'waarde'] = scaled.loc[
+        no_distribution_overig, 'sample_total'
+    ]
+
+    # Gemiddelde over exact dezelfde monsternames als Totale bedekking. Omdat
+    # iedere monstername eerst exact naar sample_total is geschaald, is de som
+    # van deze categorie-gemiddelden gelijk aan het gemiddelde van sample_total.
+    out = (
+        scaled.groupby(['jaar', 'categorie'], as_index=False)['waarde']
+        .mean()
+        .sort_values(['jaar', 'categorie'])
+    )
+
+    caption = (
+        'Aggregatie: per monstername is de soortverdeling berekend uit de som van '
+        'de individuele soortbedekkingen en vervolgens geschaald naar '
+        'totaal_bedekking_locatie. Daarna is per jaar het gemiddelde over dezelfde '
+        'CollectieReferenties berekend als bij Totale bedekking. De gestapelde som '
+        'is daardoor exact gelijk aan Totale bedekking.'
+    )
+    return out, caption
+
 AXIS_FONT_SIZE = 16
 AXIS_FONT_COLOR = "black"
 
@@ -37,7 +235,7 @@ def _style_axis_text(fig):
 PREFERRED_ORDERS = {
     "KRW score": ["Gunstig (1-2)", "Neutraal (3-4)", "Ongewenst (5)", "Geen match"],
     "Trofieniveau": ["oligotroof", "mesotroof", "eutroof", "sterk eutroof", "brak", "marien", "kroos", "Onbekend", "Geen match"],
-    "Soortgroepen": ["chariden", "iseotiden", "parvopotamiden", "magnopotamiden", "myriophylliden", "vallisneriiden", "elodeiden", "stratiotiden", "pepliden", "batrachiiden", "nymphaeiden", "haptofyten", "Overig / Individueel", "Geen match"],
+    "Soortgroepen": SPECIES_TREND_ORDER,
 }
 
 
@@ -160,6 +358,42 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
             return None, 'Geen data beschikbaar voor groeivormen over de jaren.', ''
         fig = px.bar(trend, x='jaar', y='waarde', color='groeivorm', category_orders={'groeivorm': GROWTH_ORDER}, color_discrete_map=GROWTH_COLORS, title='Trend in groeivormen over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Bedekking (%)', 'groeivorm': 'Groeivorm'})
         fig.update_layout(height=420, yaxis_title='Bedekking (%)', barmode='stack')
+        _style_axis_text(fig)
+        return fig, None, caption
+    if trend_mode == 'Soortgroepen':
+        trend, caption = _compute_absolute_species_group_trend(df)
+        if trend.empty:
+            return None, 'Geen data beschikbaar voor soortgroepen over de jaren.', ''
+        selected_waterbodies = [
+            str(body).strip()
+            for body in (filters.waterbodies or ())
+            if str(body).strip()
+        ]
+        waterbody_label = (
+            ', '.join(selected_waterbodies)
+            if selected_waterbodies
+            else 'alle waterlichamen'
+        )
+        fig = px.bar(
+            trend,
+            x='jaar',
+            y='waarde',
+            color='categorie',
+            category_orders={'categorie': SPECIES_TREND_ORDER},
+            color_discrete_map=SPECIES_TREND_COLORS,
+            title=f'Bedekkingspercentages soorten {waterbody_label}',
+            labels={
+                'jaar': 'Jaar',
+                'waarde': 'Bedekking (%)',
+                'categorie': 'Soort',
+            },
+        )
+        fig.update_layout(
+            height=500,
+            barmode='stack',
+            yaxis=dict(rangemode='tozero', ticksuffix='%'),
+            legend=dict(traceorder='normal'),
+        )
         _style_axis_text(fig)
         return fig, None, caption
     trend, caption = _compute_fraction_trend(df, trend_mode)
