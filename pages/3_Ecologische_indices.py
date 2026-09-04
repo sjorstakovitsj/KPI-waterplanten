@@ -1,6 +1,6 @@
 import streamlit as st
 from utils import CHEM_PARAM_SUGGESTIONS, SEASON_ORDER, get_available_chemistry_locations, get_available_chemistry_parameter_labels, get_preferred_chemistry_locations, load_chemistry_data, load_data
-from waterplanten_app.services.ecological_indices_service import build_bubble_figure, build_dual_axis_view, build_heatmap_figure, get_shared_years
+from waterplanten_app.services.ecological_indices_service import build_bubble_figure, build_dual_axis_view, build_heatmap_figure, format_chemistry_label, get_shared_years
 from waterplanten_app.ui.charts import render_plot
 from waterplanten_app.ui.filters import select_projects, select_waterbodies
 
@@ -37,7 +37,7 @@ if df.empty:
     st.error('Geen data geladen.')
     st.stop()
 st.sidebar.header('Selectie filters')
-projects = select_projects(df, default=('KRW',))
+projects = select_projects(df, default=('KRW', 'N2000'))
 bodies = select_waterbodies(df, projects, 'Selecteer waterlichaam', default=('IJsselmeer',))
 years = get_shared_years(projects, bodies)
 period = None if not years else tuple(st.slider('Selecteer periode (voor chemie vs ecologie én bubble plot)', int(min(years)), int(max(years)), [int(min(years)), int(max(years))], key='ecol_shared_period'))
@@ -53,8 +53,32 @@ else:
     selected_location = preferred_location or (default_loc if default_loc in options else None)
     location = st.sidebar.selectbox('Meetlocatie chemie', options=options, index=(options.index(selected_location) if selected_location in options else None), key='chem_vs_eco_location', placeholder='Kies een meetlocatie') if options else None
     labels = get_available_chemistry_parameter_labels(df_chem)
-    preferred = [x for code in CHEM_PARAM_SUGGESTIONS for x in labels if str(x).startswith(f'{code} ') or str(x) == code or str(x).startswith(f'{code}—') or str(x).startswith(f'{code} —')]
-    chems = tuple(st.sidebar.multiselect('Selecteer stof(fen) (max. 5)', options=labels, default=(preferred[:2] if preferred else labels[:1]), key='chem_vs_eco_params', max_selections=5)[:5])
+    # Selecteer standaard Doorzicht en Chlorofyl-a, voor zover beschikbaar.
+    def _normalize_chem_label(value):
+        return ''.join(ch for ch in str(value).casefold() if ch.isalnum())
+
+    normalized_labels = {label: _normalize_chem_label(label) for label in labels}
+    default_chems = []
+    for aliases in (('doorzicht', 'secchi'), ('chlorofyla', 'chlorofyl', 'chla')):
+        match = next(
+            (
+                label for label, normalized in normalized_labels.items()
+                if any(alias in normalized for alias in aliases)
+                and label not in default_chems
+            ),
+            None,
+        )
+        if match is not None:
+            default_chems.append(match)
+
+    # Val terug op de bestaande voorkeurslijst als een van beide parameters ontbreekt.
+    if len(default_chems) < 2:
+        preferred = [x for code in CHEM_PARAM_SUGGESTIONS for x in labels if str(x).startswith(f'{code} ') or str(x) == code or str(x).startswith(f'{code}—') or str(x).startswith(f'{code} —')]
+        default_chems.extend(x for x in preferred if x not in default_chems)
+    if not default_chems and labels:
+        default_chems = list(labels[:1])
+
+    chems = tuple(st.sidebar.multiselect('Selecteer stof(fen) (max. 5)', options=labels, default=default_chems[:2], format_func=format_chemistry_label, key='chem_vs_eco_params', max_selections=5)[:5])
     left_metric = st.sidebar.selectbox('Linker Y-as', ['Totale bedekking', 'Soortgroep', 'Trofieniveau', 'KRW score', 'Kenmerkende soort (N2000)', 'Groeivormen'], index=0)
     display_mode = st.sidebar.radio('Weergave linker Y-as', ['Lijnen', 'Kolommen', 'Gestapeld gebied'], index=1)
     seasons = tuple(st.sidebar.multiselect('Seizoensgemiddelden chemie', options=SEASON_ORDER, default=SEASON_ORDER))

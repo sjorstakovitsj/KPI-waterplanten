@@ -15,12 +15,42 @@ KRW = {'Gunstig (1-2)': '#2ca02c', 'Neutraal (3-4)': '#ff7f0e', 'Ongewenst (5)':
 TROFIE = {'oligotroof': '#2ca02c', 'mesotroof': '#1f77b4', 'eutroof': '#ff7f0e', 'sterk eutroof': '#d62728', 'brak': '#ffd700', 'marien': '#8c510a', 'kroos': '#7f7f7f', 'Onbekend': '#999999', NO_MATCH: '#9e9e9e'}
 SOORTGROEP = {'chariden': '#1b9e77', 'iseotiden': '#7570b3', 'parvopotamiden': '#d95f02', 'magnopotamiden': '#66a61e', 'myriophylliden': '#e7298a', 'vallisneriiden': '#e6ab02', 'elodeiden': '#a6761d', 'stratiotiden': '#1f78b4', 'pepliden': '#b2df8a', 'batrachiiden': '#fb9a99', 'nymphaeiden': '#cab2d6', 'haptofyten': '#fdbf6f', 'Overig / Individueel': '#999999', NO_MATCH: '#9e9e9e'}
 
+@st.dialog("Nieuw in deze versie", width="large")
+def show_release_notes():
+    st.markdown(
+        """
+        ### Ecologische indices
+
+        - KRW en N2000 zijn standaard geselecteerd.
+        - Doorzicht en chlorofyl-a zijn standaard geselecteerd.
+        - De gekozen ecologische metric wordt correct weergegeven.
+        - Stofnamen en eenheden worden automatisch opgeschoond.
+        - Technische stofcodes worden niet meer getoond.
+        - De legenda is gecentreerd en de grafiek gebruikt meer paginabreedte.
+
+        ### Trendgrafieken
+
+        - Jaren zonder gegevens worden overgeslagen.
+        - Tijdshiaten worden gemarkeerd met een onderbroken lijn.
+        - Legenda's staan gecentreerd onder de grafieken.
+        - De grafieken zijn hoger en beter leesbaar.
+        """
+    )
+
+    if st.button("Begrepen", type="primary", use_container_width=True):
+        st.session_state["release_notes_seen"] = True
+        st.rerun()
+
+
+if not st.session_state.get("release_notes_seen", False):
+    show_release_notes()
+
 df = load_data()
 st.sidebar.header('Algemene filters')
 if df.empty:
     st.error('Geen data geladen. Controleer utils.py en het bronbestand.')
     st.stop()
-filters = DashboardFilters(year=select_year(df, 'Selecteer meetjaar'), projects=select_projects(df))
+filters = DashboardFilters(year=select_year(df, 'Selecteer meetjaar', default=2024), projects=select_projects(df))
 result = build_overview_result(filters)
 
 st.subheader('🥧 Samenstelling waarnemingen (individuele soorten)')

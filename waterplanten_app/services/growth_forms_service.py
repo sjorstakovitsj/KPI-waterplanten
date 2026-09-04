@@ -226,7 +226,15 @@ def _style_axis_text(fig):
         tickfont=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
     )
     fig.update_layout(
+        # Uniforme legenda-opmaak voor alle grafieken die deze stijlfunctie gebruiken.
+        # De legenda blijft horizontaal, onder de X-as en gecentreerd op de plotbreedte.
+        margin=dict(l=80, r=80, t=90, b=190),
         legend=dict(
+            orientation='h',
+            x=0.5,
+            xanchor='center',
+            y=-0.30,
+            yanchor='top',
             font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
             title_font=dict(size=AXIS_FONT_SIZE, color=AXIS_FONT_COLOR),
         )
@@ -342,28 +350,95 @@ def _compute_fraction_trend(df_in: pd.DataFrame, trend_mode: str):
     return out, caption
 
 
+def _prepare_trend_year_axis(
+    trend: pd.DataFrame,
+    value_column: str,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Behoud alleen jaren met echte trenddata en maak de jaaras categorisch.
+
+    Een gemeten waarde van 0 blijft geldig. Alleen ontbrekende of ongeldige
+    jaren en jaren zonder enige numerieke waarde worden verwijderd.
+    """
+    if trend is None or trend.empty or 'jaar' not in trend.columns:
+        return trend, []
+
+    out = trend.copy()
+    out['jaar'] = pd.to_numeric(out['jaar'], errors='coerce')
+    if value_column not in out.columns:
+        return out.iloc[0:0].copy(), []
+    out[value_column] = pd.to_numeric(out[value_column], errors='coerce')
+    out = out.dropna(subset=['jaar'])
+
+    # Een jaar is beschikbaar zodra ten minste een echte numerieke waarde
+    # aanwezig is. Nulwaarden blijven dus bewust behouden.
+    available = (
+        out.groupby('jaar')[value_column]
+        .apply(lambda values: values.notna().any())
+    )
+    available_years = sorted(
+        int(year) for year, has_data in available.items() if has_data
+    )
+    out = out[out['jaar'].isin(available_years)].copy()
+    out = out.dropna(subset=[value_column])
+    out['jaar'] = out['jaar'].astype(int).astype(str)
+    year_order = [str(year) for year in available_years]
+    return out, year_order
+
+
+def _apply_available_year_axis(fig, year_order: list[str]):
+    """Toon beschikbare jaren en markeer ieder tijdshiaat met een stippellijn."""
+    fig.update_xaxes(
+        type='category',
+        categoryorder='array',
+        categoryarray=year_order,
+        tickmode='array',
+        tickvals=year_order,
+        ticktext=year_order,
+    )
+
+    # Plaats de lijn halverwege twee opeenvolgende categorieen zodra een of meer
+    # kalenderjaren ontbreken. De lijn beweegt automatisch mee met de jaarselectie.
+    for index in range(1, len(year_order)):
+        previous_year = int(year_order[index - 1])
+        current_year = int(year_order[index])
+        if current_year - previous_year > 1:
+            fig.add_vline(
+                x=index - 0.5,
+                line_width=2,
+                line_dash='dash',
+                line_color='rgba(90, 90, 90, 0.75)',
+                layer='above',
+            )
+    return fig
+
+
 def build_trend_figure(filters: DashboardFilters, trend_mode: str):
     df = _filtered_df(filters)
     if df.empty:
         return None, 'Geen data gevonden voor de huidige selectie.', ''
     if trend_mode == 'Totale bedekking':
         trend = _year_total_cover_mean(df)
+        trend, year_order = _prepare_trend_year_axis(trend, 'waarde')
         if trend.empty:
             return None, 'Geen data beschikbaar voor totale bedekking over de jaren.', ''
         fig = px.bar(trend, x='jaar', y='waarde', title='Trend totale bedekking over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Gem. totale bedekking (%)'})
-        fig.update_layout(height=420)
+        fig.update_layout(height=600)
+        _apply_available_year_axis(fig, year_order)
         _style_axis_text(fig)
         return fig, None, 'Aggregatie: gemiddelde totale bedekking per monstername (CollectieReferentie) per jaar.'
     if trend_mode == 'Groeivormen':
         trend, caption = _compute_growth_trend(df)
+        trend, year_order = _prepare_trend_year_axis(trend, 'waarde')
         if trend.empty:
             return None, 'Geen data beschikbaar voor groeivormen over de jaren.', ''
         fig = px.bar(trend, x='jaar', y='waarde', color='groeivorm', category_orders={'groeivorm': GROWTH_ORDER}, color_discrete_map=GROWTH_COLORS, title='Trend in groeivormen over de jaren', labels={'jaar': 'Jaar', 'waarde': 'Bedekking (%)', 'groeivorm': 'Groeivorm'})
-        fig.update_layout(height=420, yaxis_title='Bedekking (%)', barmode='stack')
+        fig.update_layout(height=600, yaxis_title='Bedekking (%)', barmode='stack')
+        _apply_available_year_axis(fig, year_order)
         _style_axis_text(fig)
         return fig, None, caption
     if trend_mode == 'Soortgroepen':
         trend, caption = _compute_absolute_species_group_trend(df)
+        trend, year_order = _prepare_trend_year_axis(trend, 'waarde')
         if trend.empty:
             return None, 'Geen data beschikbaar voor soortgroepen over de jaren.', ''
         selected_waterbodies = [
@@ -391,14 +466,16 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
             },
         )
         fig.update_layout(
-            height=500,
+            height=650,
             barmode='stack',
             yaxis=dict(rangemode='tozero', ticksuffix='%'),
             legend=dict(traceorder='normal'),
         )
+        _apply_available_year_axis(fig, year_order)
         _style_axis_text(fig)
         return fig, None, caption
     trend, caption = _compute_fraction_trend(df, trend_mode)
+    trend, year_order = _prepare_trend_year_axis(trend, 'fractie')
     if trend.empty:
         return None, f'Geen data beschikbaar voor {trend_mode.lower()} over de jaren.', ''
     order = PREFERRED_ORDERS.get(trend_mode)
@@ -406,7 +483,8 @@ def build_trend_figure(filters: DashboardFilters, trend_mode: str):
         cats = [x for x in trend['categorie'].dropna().astype(str).unique().tolist() if x != 'Geen match']
         order = sorted(cats, key=str.lower) + (['Geen match'] if 'Geen match' in set(trend['categorie'].astype(str)) else [])
     fig = px.bar(trend, x='jaar', y='fractie', color='categorie', category_orders={'categorie': order} if order else None, title=f'Trend in {trend_mode.lower()} over de jaren', labels={'jaar': 'Jaar', 'fractie': 'Fractie van totale bedekking', 'categorie': trend_mode}, color_discrete_sequence=px.colors.qualitative.Safe)
-    fig.update_layout(height=420, yaxis=dict(range=[0, 1], tickformat='.0%'), barmode='stack')
+    fig.update_layout(height=600, yaxis=dict(range=[0, 1], tickformat='.0%'), barmode='stack')
+    _apply_available_year_axis(fig, year_order)
     _style_axis_text(fig)
     extra = 'Bron trofieniveau-indeling: Verhofstad et al. (2025) – Waterplanten in Nederland: Regionaal herstel, landelijke achteruitgang. https://www.floron.nl/Portals/1/Downloads/Publicaties/VerhofstadETAL2025_DLN_Waterplanten_in_Nederland_Regionaal_herstel_Landelijke_achteruitgang.pdf' if trend_mode == 'Trofieniveau' else ''
     full_caption = caption + ('\n' + extra if extra else '')

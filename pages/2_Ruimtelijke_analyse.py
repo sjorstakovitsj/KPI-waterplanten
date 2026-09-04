@@ -30,7 +30,7 @@ def main() -> None:
         st.error("Geen data geladen.")
         st.stop()
 
-    year = select_year(df, "Selecteer jaar")
+    year = select_year(df, "Selecteer jaar", default=2024)
     projects = select_projects(df)
     filtered, species_options = prepare_spatial_filter_context(df, year, projects)
 

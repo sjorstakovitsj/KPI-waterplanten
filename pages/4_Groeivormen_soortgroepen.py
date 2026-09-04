@@ -14,7 +14,7 @@ if df.empty:
     st.stop()
 st.sidebar.header('Filters')
 
-projects = select_projects(df, default=('KRW',))
+projects = select_projects(df, default=('KRW', 'N2000'))
 filters = DashboardFilters(
     year=select_year(df, 'Selecteer meetjaar', default=2025),
     projects=projects,

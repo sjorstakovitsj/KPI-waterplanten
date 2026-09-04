@@ -1,4 +1,6 @@
 from __future__ import annotations
+import re
+import unicodedata
 
 import numpy as np
 import pandas as pd
@@ -15,6 +17,87 @@ try:
     from waterplanten_app.core.chemistry import get_chem_ecology_timeseries, summarize_chemistry_period_average
 except Exception:
     from waterplanten_app.pipelines.chemistry_pipeline import get_chem_ecology_timeseries, summarize_chemistry_period_average
+
+
+def format_unit(unit: object) -> str:
+    """Zet bekende uitgeschreven eenheden om naar een compact symbool."""
+    if unit is None or pd.isna(unit):
+        return ''
+
+    original = str(unit).strip()
+    if not original:
+        return ''
+
+    # Normaliseer alleen voor vergelijking; onbekende eenheden blijven ongewijzigd.
+    key = unicodedata.normalize('NFKC', original).casefold().strip()
+    key = key.replace('μ', 'µ')
+    key = re.sub(r'\s+', ' ', key)
+    key = re.sub(r'\s*/\s*', '/', key)
+
+    aliases = {
+        'decimeter': 'dm',
+        'decimeters': 'dm',
+        'dm': 'dm',
+        'microgram per liter': 'µg/L',
+        'microgram/liter': 'µg/L',
+        'microgram/l': 'µg/L',
+        'µg/l': 'µg/L',
+        'ug/l': 'µg/L',
+        'milligram per liter': 'mg/L',
+        'milligram/liter': 'mg/L',
+        'milligram/l': 'mg/L',
+        'mg/l': 'mg/L',
+        'procent': '%',
+        'per meter': 'm',
+        'millisiemens per meter': 'mS/m',
+        'graad celsius': '°C',
+        'dimensieloos': ''
+        
+    }
+    return aliases.get(key, original)
+
+
+def format_parameter_name(label: object) -> str:
+    """Toon de omschrijving zonder technische stofcode als die herkenbaar aanwezig is."""
+    if label is None or pd.isna(label):
+        return ''
+
+    name = str(label).strip()
+    if not name:
+        return ''
+
+    # Splits alleen op een duidelijk scheidingsteken met omliggende spaties.
+    # Hierdoor blijft een koppelteken binnen namen zoals chlorofyl-a intact.
+    parts = re.split(r'\s+(?:—|–|-|:)\s+', name, maxsplit=1)
+    if len(parts) != 2:
+        return name
+
+    code, description = (part.strip() for part in parts)
+    looks_like_code = (
+        bool(re.search(r'[A-Z0-9]', code))
+        and len(code.split()) <= 2
+        and len(code) <= 20
+    )
+    return description if looks_like_code and description else name
+
+
+def format_chemistry_label(label: object) -> str:
+    """Formatteer een chemisch label als omschrijving met compacte eenheid."""
+    name = format_parameter_name(label)
+    if not name:
+        return ''
+
+    # Lees een eventuele eenheid uit de laatste set ronde haakjes.
+    match = re.search(r'\s*\(([^()]*)\)\s*$', name)
+    if not match:
+        return name
+
+    raw_unit = match.group(1).strip()
+    base_name = name[:match.start()].strip()
+    unit = format_unit(raw_unit)
+
+    # Onbekende eenheden blijven behouden; dimensieloos wordt weggelaten.
+    return f'{base_name} ({unit})' if unit else base_name
 
 
 def ensure_nomatch_display_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -80,7 +163,7 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
     if not chemistry_labels:
         return None, None, None, None, 'Selecteer minimaal één chemische stof om de dubbele Y-as grafiek te tonen.'
     eco_mode = krw_mode if left_metric == 'KRW score' else (n2000_mode if left_metric == 'Kenmerkende soort (N2000)' else 'default')
-    left_metric_display = 'Bedekking ondergedoken waterplanten (zie bij groeivormen)' if left_metric == 'Totale bedekking' else left_metric
+    left_metric_display = left_metric
     eco_year, chem_year, common_years = get_chem_ecology_timeseries(df_eco=df_eco, df_chem=df_chem, project_sel=projects, body_sel=bodies, ecology_metric=left_metric, chemistry_labels=chemistry_labels, chemistry_location=chemistry_location, ecology_mode=eco_mode, definitive_only=False, seasons=seasons, top_n=top_n, restrict_to_common_years=False)
     if chem_year.empty or not common_years:
         return None, eco_year, chem_year, None, 'Geen chemiedata beschikbaar voor deze filtercombinatie.'
@@ -99,15 +182,32 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
         d = chem_year[chem_year['serie'] == serie].sort_values('jaar')
         if d.empty:
             continue
-        unit = '' if 'eenheid_omschrijving' not in d.columns or d['eenheid_omschrijving'].dropna().empty else str(d['eenheid_omschrijving'].dropna().iloc[0])
-        fig.add_trace(go.Scatter(x=d['jaar'], y=d['chem_value'], name=f'{serie} ({unit})' if unit else serie, mode='lines+markers' if show_markers else 'lines', line=dict(color=chem_palette[i % len(chem_palette)], width=3, dash=chem_dashes[i % len(chem_dashes)]), marker=dict(size=7, symbol='diamond')), secondary_y=True)
+        raw_unit = '' if 'eenheid_omschrijving' not in d.columns or d['eenheid_omschrijving'].dropna().empty else str(d['eenheid_omschrijving'].dropna().iloc[0]).strip()
+        unit = format_unit(raw_unit)
+
+        # Verwijder achteraan zowel de uitgeschreven eenheid als bestaande aliases.
+        # Voeg daarna uitsluitend de compacte alias toe.
+        serie_display = format_parameter_name(serie)
+        unit_variants = [value for value in (raw_unit, unit) if value]
+        changed = True
+        while changed:
+            changed = False
+            for value in unit_variants:
+                suffix = f'({value})'
+                if serie_display.casefold().endswith(suffix.casefold()):
+                    serie_display = serie_display[:-len(suffix)].rstrip()
+                    changed = True
+        if unit:
+            serie_display = f'{serie_display} ({unit})'
+        fig.add_trace(go.Scatter(x=d['jaar'], y=d['chem_value'], name=serie_display, mode='lines+markers' if show_markers else 'lines', line=dict(color=chem_palette[i % len(chem_palette)], width=3, dash=chem_dashes[i % len(chem_dashes)]), marker=dict(size=7, symbol='diamond')), secondary_y=True)
     left_title = 'Gemiddelde KRW-score' if left_metric == 'KRW score' and krw_mode == 'index' else ('Aantal aanwezigheidsrecords' if left_metric == 'Kenmerkende soort (N2000)' and n2000_mode == 'records' else (left_metric_display if left_metric == 'Totale bedekking' else f'{left_metric} / bedekking'))
-    units = [u for u in chem_year.get('eenheid_omschrijving', pd.Series(dtype='object')).dropna().astype(str).unique().tolist() if u]
-    right_title = f'Concentratie ({units[0]})' if len(units) == 1 else ('Concentratie (eenheidsafhankelijk)' if len(units) > 1 else 'Concentratie')
+    # Geen titel of placeholder bij de rechter Y-as.
+    # De eenheden staan uitsluitend bij de afzonderlijke stoffen in de legenda.
+    right_title = None
     season_label = ', '.join(seasons) if seasons else 'alle seizoenen'
     fig.update_layout(
         title=dict(
-            text=f"Chemie vs {left_metric_display}<br><sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>",
+            text=f"<sup>Ecologie: {', '.join(projects) or 'geen project'} — {', '.join(bodies) or 'geen waterlichaam'} — Chemie: {chemistry_location or 'geen locatie'} — Seizoen: {season_label}</sup>",
             font=dict(size=22, color='black'),
             x=0.01,
             xanchor='left',
@@ -115,15 +215,16 @@ def build_dual_axis_view(projects: tuple[str, ...], bodies: tuple[str, ...], df_
             yanchor='top',
         ),
         height=800,
-        margin=dict(l=90, r=430, t=105, b=80),
+        # Ruimte bovenaan voor titel en horizontale legenda; rechts geen brede legendamarge meer.
+        margin=dict(l=90, r=90, t=185, b=80),
         hovermode='x unified',
         font=dict(size=17, color='black'),
         legend=dict(
-            orientation='v',
-            yanchor='top',
-            y=1.0,
-            xanchor='left',
-            x=1.02,
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
             font=dict(size=16, color='black'),
             title_font=dict(size=17, color='black'),
             bgcolor='rgba(255,255,255,0.92)',

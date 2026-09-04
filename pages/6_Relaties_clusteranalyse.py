@@ -12,7 +12,7 @@ df = load_data()
 if df.empty:
     st.error('Geen data beschikbaar.')
     st.stop()
-filters = DashboardFilters(year=select_year(df, 'Kies jaar analyse'))
+filters = DashboardFilters(year=select_year(df, 'Kies jaar analyse', default=2024))
 c1, c2 = st.columns(2)
 with c1:
     fig, msg = build_scatter_cover_figure(filters); render_plot(fig, info=msg)
