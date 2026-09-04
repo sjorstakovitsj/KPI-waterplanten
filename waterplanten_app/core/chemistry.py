@@ -225,6 +225,48 @@ def _read_chemistry_raw(path: str, required: list[str]) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _ensure_chemistry_schema(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Herstel afgeleide chemiekolommen voor oude caches en afwijkende invoer."""
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df.copy()
+
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+    for col in ('parameter_code', 'parameter_omschrijving', 'stofnaam',
+                'hoedanigheid_code', 'eenheid_code', 'eenheid_omschrijving',
+                'eenheid_label', 'chem_label'):
+        if col not in out.columns:
+            out[col] = ''
+
+    def clean_text(column: str) -> pd.Series:
+        return out[column].fillna('').astype(str).str.strip()
+
+    parameter_code = clean_text('parameter_code')
+    parameter_description = clean_text('parameter_omschrijving')
+    substance_name = clean_text('stofnaam')
+    substance_name = substance_name.mask(substance_name.eq(''), parameter_description)
+    substance_name = substance_name.mask(substance_name.eq(''), parameter_code)
+    substance_name = substance_name.mask(substance_name.eq(''), 'Onbekend')
+
+    unit_code = clean_text('eenheid_code')
+    unit_description = clean_text('eenheid_omschrijving')
+    unit_label = clean_text('eenheid_label')
+    unit_label = unit_label.mask(unit_label.eq(''), unit_description)
+    unit_label = unit_label.mask(unit_label.eq(''), unit_code)
+
+    base_label = substance_name.copy()
+    has_code = parameter_code.ne('') & ~parameter_code.str.upper().eq('NVT')
+    base_label = base_label.mask(has_code, parameter_code + ' — ' + substance_name)
+    generated_label = base_label.where(unit_label.eq(''), base_label + ' (' + unit_label + ')')
+
+    existing_label = clean_text('chem_label')
+    out['stofnaam'] = substance_name
+    out['parameter_omschrijving'] = parameter_description.mask(parameter_description.eq(''), substance_name)
+    out['eenheid_label'] = unit_label
+    out['chem_label'] = existing_label.mask(existing_label.eq(''), generated_label)
+    return out
+
+
 def _clean_chem_numeric_strings(series: pd.Series) -> pd.Series:
     return (
         series.fillna('')
@@ -245,7 +287,7 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
         try:
             cached = _read_parquet_to_pandas(CHEMISTRY_PARQUET)
             if cached is not None and not cached.empty:
-                return cached
+                return _ensure_chemistry_schema(cached)
         except Exception:
             pass
 
@@ -338,7 +380,7 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
     for col in keep_cols:
         if col not in df.columns:
             df[col] = np.nan
-    df = df[keep_cols].copy()
+    df = _ensure_chemistry_schema(df[keep_cols].copy())
 
     try:
         _write_parquet_from_pandas(df, CHEMISTRY_PARQUET)
@@ -350,7 +392,7 @@ def _load_chemistry_data_cached(sig: tuple[str, float, str], path: str = CHEMIST
 @st.cache_data(show_spinner=False)
 def load_chemistry_data(path: str = CHEMISTRY_FILE_PATH) -> pd.DataFrame:
     sig = _chemistry_file_signature(path)
-    return _load_chemistry_data_cached(sig, path)
+    return _ensure_chemistry_schema(_load_chemistry_data_cached(sig, path))
 
 
 @st.cache_data(show_spinner=False)
@@ -452,6 +494,7 @@ def get_available_chemistry_parameter_labels(
         df_chem = load_chemistry_data()
     if df_chem.empty:
         return []
+    df_chem = _ensure_chemistry_schema(df_chem)
     labels = (
         df_chem[['chem_label', 'parameter_code']]
         .dropna(subset=['chem_label'])
@@ -475,7 +518,7 @@ def aggregate_chemistry_yearly(
 ) -> pd.DataFrame:
     if df_chem is None or df_chem.empty or not chemistry_labels:
         return pd.DataFrame(columns=['jaar', 'serie', 'chem_value', 'eenheid_code', 'eenheid_omschrijving', 'parameter_code'])
-    d = df_chem.copy()
+    d = _ensure_chemistry_schema(df_chem)
     d = d[d['chem_label'].isin(list(chemistry_labels))].copy()
     if location:
         d = d[d['locatie_code'].astype(str) == str(location)].copy()
@@ -671,6 +714,7 @@ __all__ = [
     'CHEM_MARKER_COLOR',
     'SEASON_ORDER',
     'SEASON_MONTH_MAP',
+    '_ensure_chemistry_schema',
     'load_chemistry_data',
     '_load_chemistry_data_cached',
     '_read_chemistry_raw',
