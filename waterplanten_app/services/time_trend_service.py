@@ -400,6 +400,25 @@ def build_regression_outputs(df_trend: pd.DataFrame, metric: str, min_years: int
 
 
 
+def _scatter_map_compatible(data_frame: pd.DataFrame, **kwargs):
+    """Bouw een kaart met MapLibre en val terug op Mapbox bij oudere Plotly-versies."""
+    if hasattr(px, 'scatter_map'):
+        map_style = kwargs.pop('mapbox_style', kwargs.pop('map_style', None))
+        if map_style is not None:
+            kwargs['map_style'] = map_style
+        return px.scatter_map(data_frame, **kwargs)
+
+    if hasattr(px, 'scatter_mapbox'):
+        mapbox_style = kwargs.pop('map_style', kwargs.pop('mapbox_style', None))
+        if mapbox_style is not None:
+            kwargs['mapbox_style'] = mapbox_style
+        return px.scatter_mapbox(data_frame, **kwargs)
+
+    raise RuntimeError(
+        'De geinstalleerde Plotly-versie ondersteunt geen scatterkaart.'
+    )
+
+
 def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame):
     """
     Bouwt een OpenStreetMap-kaart met per locatie de regressietrend.
@@ -459,7 +478,7 @@ def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame)
 
     center = {'lat': float(map_df['lat'].mean()), 'lon': float(map_df['lon'].mean())}
 
-    fig = px.scatter_mapbox(
+    fig = _scatter_map_compatible(
         map_df,
         lat='lat',
         lon='lon',
@@ -483,7 +502,7 @@ def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame)
             'Stabiel ➡️': 'grey',
             'Onbekend': 'lightgrey',
         },
-        mapbox_style='open-street-map',
+        map_style='open-street-map',
         center=center,
         zoom=9,
         title='Regressietrend per meetlocatie',
