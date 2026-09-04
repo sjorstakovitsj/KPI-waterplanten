@@ -226,12 +226,59 @@ def _read_chemistry_raw(path: str, required: list[str]) -> pd.DataFrame:
 
 
 def _ensure_chemistry_schema(df: pd.DataFrame | None) -> pd.DataFrame:
-    """Herstel afgeleide chemiekolommen voor oude caches en afwijkende invoer."""
+    """Maak oude caches en afwijkende chemiedata compatibel met het huidige schema."""
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df.copy()
 
     out = df.copy()
     out.columns = [str(c).strip() for c in out.columns]
+
+    # Ondersteun bekende historische kolomnamen zonder bestaande kolommen te overschrijven.
+    aliases = {
+        'event_datum': 'eventdatum',
+        'datum_bemonstering': 'eventdatum',
+        'resultaat': 'event_waarde_num',
+        'meetwaarde': 'event_waarde_num',
+        'waarde': 'event_waarde_num',
+    }
+    for source, target in aliases.items():
+        if target not in out.columns and source in out.columns:
+            out[target] = out[source]
+
+    # Herstel datum, jaar, maand en seizoen waar mogelijk.
+    if 'eventdatum' not in out.columns:
+        out['eventdatum'] = pd.NaT
+    out['eventdatum'] = pd.to_datetime(out['eventdatum'], errors='coerce')
+    if 'jaar' not in out.columns:
+        out['jaar'] = out['eventdatum'].dt.year
+    else:
+        out['jaar'] = pd.to_numeric(out['jaar'], errors='coerce')
+        out['jaar'] = out['jaar'].fillna(out['eventdatum'].dt.year)
+    if 'maand' not in out.columns:
+        out['maand'] = out['eventdatum'].dt.month
+    else:
+        out['maand'] = pd.to_numeric(out['maand'], errors='coerce').fillna(out['eventdatum'].dt.month)
+    if 'seizoen' not in out.columns:
+        out['seizoen'] = out['maand'].map(SEASON_MONTH_MAP)
+    else:
+        missing_season = out['seizoen'].isna() | out['seizoen'].astype(str).str.strip().eq('')
+        out.loc[missing_season, 'seizoen'] = out.loc[missing_season, 'maand'].map(SEASON_MONTH_MAP)
+
+    # Herstel de numerieke meetwaarde uit de beste beschikbare bron.
+    if 'event_waarde_num' in out.columns:
+        numeric_value = pd.to_numeric(_clean_chem_numeric_strings(out['event_waarde_num']), errors='coerce')
+    else:
+        numeric_value = pd.Series(np.nan, index=out.index, dtype='float64')
+    for source in ('resultaat', 'event_waarde_tekst', 'event_waarde', 'meetwaarde', 'waarde'):
+        if source in out.columns:
+            candidate = pd.to_numeric(_clean_chem_numeric_strings(out[source]), errors='coerce')
+            numeric_value = numeric_value.combine_first(candidate)
+    numeric_value = numeric_value.mask(numeric_value >= 1e10)
+    out['event_waarde_num'] = numeric_value
+    if 'resultaat' not in out.columns:
+        out['resultaat'] = numeric_value
+
+    # Herstel labels die in oudere Parquet-versies nog niet aanwezig waren.
     for col in ('parameter_code', 'parameter_omschrijving', 'stofnaam',
                 'hoedanigheid_code', 'eenheid_code', 'eenheid_omschrijving',
                 'eenheid_label', 'chem_label'):
@@ -247,18 +294,14 @@ def _ensure_chemistry_schema(df: pd.DataFrame | None) -> pd.DataFrame:
     substance_name = substance_name.mask(substance_name.eq(''), parameter_description)
     substance_name = substance_name.mask(substance_name.eq(''), parameter_code)
     substance_name = substance_name.mask(substance_name.eq(''), 'Onbekend')
-
     unit_code = clean_text('eenheid_code')
     unit_description = clean_text('eenheid_omschrijving')
-    unit_label = clean_text('eenheid_label')
-    unit_label = unit_label.mask(unit_label.eq(''), unit_description)
+    unit_label = clean_text('eenheid_label').mask(lambda s: s.eq(''), unit_description)
     unit_label = unit_label.mask(unit_label.eq(''), unit_code)
-
     base_label = substance_name.copy()
     has_code = parameter_code.ne('') & ~parameter_code.str.upper().eq('NVT')
     base_label = base_label.mask(has_code, parameter_code + ' — ' + substance_name)
     generated_label = base_label.where(unit_label.eq(''), base_label + ' (' + unit_label + ')')
-
     existing_label = clean_text('chem_label')
     out['stofnaam'] = substance_name
     out['parameter_omschrijving'] = parameter_description.mask(parameter_description.eq(''), substance_name)
@@ -519,6 +562,9 @@ def aggregate_chemistry_yearly(
     if df_chem is None or df_chem.empty or not chemistry_labels:
         return pd.DataFrame(columns=['jaar', 'serie', 'chem_value', 'eenheid_code', 'eenheid_omschrijving', 'parameter_code'])
     d = _ensure_chemistry_schema(df_chem)
+    required_values = {'jaar', 'event_waarde_num', 'chem_label'}
+    if not required_values.issubset(d.columns):
+        return pd.DataFrame(columns=['jaar', 'serie', 'chem_value', 'eenheid_code', 'eenheid_omschrijving', 'parameter_code'])
     d = d[d['chem_label'].isin(list(chemistry_labels))].copy()
     if location:
         d = d[d['locatie_code'].astype(str) == str(location)].copy()
