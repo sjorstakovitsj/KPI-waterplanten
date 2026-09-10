@@ -30,6 +30,27 @@ fig, msg, caption = build_trend_figure(filters, trend_mode)
 if msg:
     st.info(msg)
 else:
+    # Pas de typografie centraal toe op alle mogelijke grafieken onder
+    # 'Trend over de jaren', ongeacht de gekozen trendweergave.
+    fig.update_layout(
+        font=dict(size=16),
+        title_font=dict(size=22),
+        legend=dict(
+            font=dict(size=16),
+            title_font=dict(size=17),
+        ),
+        margin=dict(l=75, r=35, t=85, b=80),
+    )
+    fig.update_xaxes(
+        title_font=dict(size=18),
+        tickfont=dict(size=15),
+        automargin=True,
+    )
+    fig.update_yaxes(
+        title_font=dict(size=18),
+        tickfont=dict(size=15),
+        automargin=True,
+    )
     st.plotly_chart(fig, width='stretch')
 if caption:
     st.caption(caption)

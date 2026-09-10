@@ -476,23 +476,29 @@ def create_map(dataframe, mode, label_veg='Vegetatie', value_style='vegetation',
 
 
 def df_to_geojson_points(df: pd.DataFrame, value_col: str, id_col: str = 'locatie_id'):
-    """Zet punten (lat/lon) om naar een GeoJSON FeatureCollection."""
+    """Zet punten veilig om naar GeoJSON en behoud optionele projectinformatie."""
     features = []
-    for row in df.dropna(subset=['lat', 'lon']).itertuples(index=False):
+    required = {'lat', 'lon', value_col, id_col}
+    if df is None or df.empty or not required.issubset(df.columns):
+        return {'type': 'FeatureCollection', 'features': features}
+    clean = df.copy()
+    for col in ['lat', 'lon', value_col]:
+        clean[col] = pd.to_numeric(clean[col], errors='coerce')
+    clean = clean.dropna(subset=['lat', 'lon', value_col])
+    for row in clean.itertuples(index=False):
         props = {
-            'locatie_id': getattr(row, id_col),
-            'value': float(getattr(row, value_col)) if getattr(row, value_col) is not None else None,
+            'locatie_id': str(getattr(row, id_col)),
+            'value': float(getattr(row, value_col)),
         }
-        features.append(
-            {
-                'type': 'Feature',
-                'geometry': {'type': 'Point', 'coordinates': [float(row.lon), float(row.lat)]},
-                'properties': props,
-            }
-        )
+        if 'Project' in clean.columns:
+            project = getattr(row, 'Project', None)
+            props['project'] = 'Onbekend' if pd.isna(project) else str(project)
+        features.append({
+            'type': 'Feature',
+            'geometry': {'type': 'Point', 'coordinates': [float(row.lon), float(row.lat)]},
+            'properties': props,
+        })
     return {'type': 'FeatureCollection', 'features': features}
-
-
 
 def render_swipe_map_html(
     geojson_left: dict,
@@ -536,7 +542,7 @@ def render_swipe_map_html(
     #label_right { right: 30px; opacity: 0.95; }
     #legend { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: 520px; max-width: calc(100% - 40px); background: rgba(255,255,255,0.90); border: 1px solid rgba(0,0,0,0.12); border-radius: 12px; padding: 12px 14px; z-index: 12; backdrop-filter: blur(3px); }
     #legend .title { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 8px; }
-    #legend .bar { height: 14px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.12); background: linear-gradient(90deg, #d73027 0%, #fee08b 50%, #1a9850 100%); }
+    #legend .bar { height: 14px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.12); background: __LEGEND_BACKGROUND__; }
     #legend .labels { display: flex; justify-content: space-between; margin-top: 8px; font-size: 16px; font-weight: 650; color: rgba(0,0,0,0.80); }
     #legend .sub { text-align: center; margin-top: 3px; font-size: 14px; color: rgba(0,0,0,0.60); font-weight: 600; }
   </style>
@@ -553,7 +559,7 @@ def render_swipe_map_html(
       <div class='title'>__METRIC_LABEL__</div>
       <div class='bar'></div>
       <div class='labels'><span>__MIN_VAL__</span><span>__MAX_VAL__</span></div>
-      <div class='sub'>Laag → Hoog</div>
+      <div class='sub'>__LEGEND_SUBTITLE__</div>
     </div>
   </div>
 
@@ -563,6 +569,7 @@ def render_swipe_map_html(
     const rightData = __RIGHT_JSON__;
     const minVal = __MIN_VAL_RAW__;
     const maxVal = __MAX_VAL_RAW__;
+    const isBedekkingsgraad = __IS_BEDEKKINGSGRAAD__;
     const bounds = __BOUNDS_JSON__;
 
     const mapLeft = new maplibregl.Map({
@@ -582,26 +589,30 @@ def render_swipe_map_html(
       interactive: true
     });
 
-    mapRight.scrollZoom.disable();
-    mapRight.boxZoom.disable();
-    mapRight.dragRotate.disable();
-    mapRight.dragPan.disable();
-    mapRight.keyboard.disable();
-    mapRight.doubleClickZoom.disable();
-    mapRight.touchZoomRotate.disable();
-
-    function sync() {
-      const c = mapLeft.getCenter();
-      mapRight.jumpTo({
+    // Beide kaarthelften zijn interactief. Zo werken scrollen, slepen,
+    // dubbelklikken en pinch-to-zoom ook boven de rechterkaart.
+    let mapSyncInProgress = false;
+    function syncMaps(sourceMap, targetMap) {
+      if (mapSyncInProgress) return;
+      mapSyncInProgress = true;
+      const c = sourceMap.getCenter();
+      targetMap.jumpTo({
         center: c,
-        zoom: mapLeft.getZoom(),
-        bearing: mapLeft.getBearing(),
-        pitch: mapLeft.getPitch()
+        zoom: sourceMap.getZoom(),
+        bearing: sourceMap.getBearing(),
+        pitch: sourceMap.getPitch()
       });
+      mapSyncInProgress = false;
     }
+    mapLeft.on('move', () => syncMaps(mapLeft, mapRight));
+    mapLeft.on('moveend', () => syncMaps(mapLeft, mapRight));
+    mapRight.on('move', () => syncMaps(mapRight, mapLeft));
+    mapRight.on('moveend', () => syncMaps(mapRight, mapLeft));
 
-    mapLeft.on('move', sync);
-    mapLeft.on('moveend', sync);
+    // Zoomknoppen aan beide buitenzijden blijven bereikbaar, ongeacht de
+    // positie van de swipe-divider.
+    mapLeft.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+    mapRight.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
     function applyBasemapGray(map) {
       const style = map.getStyle();
@@ -655,6 +666,12 @@ def render_swipe_map_html(
       });
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    }
+    function projectLine(properties) {
+      return properties && properties.project ? '<br/><b>Project:</b> ' + escapeHtml(properties.project) : '';
+    }
     function addPoints(map, sourceName, layerName, data, dim = false) {
       if (map.getSource(sourceName)) {
         map.getSource(sourceName).setData(data);
@@ -671,21 +688,35 @@ def render_swipe_map_html(
         type: 'circle',
         source: sourceName,
         paint: {
+          // Alle punten blijven exact even groot; alleen de kleur varieert.
           'circle-radius': 6,
           'circle-stroke-color': dim ? 'rgba(40,40,40,0.35)' : 'rgba(40,40,40,0.75)',
           'circle-stroke-width': 1,
           'circle-opacity': dim ? 0.45 : 0.85,
-          'circle-color': [
-            'interpolate',
-            ['linear'],
-            ['get', 'value'],
-            minVal,
-            '#d73027',
-            (minVal + maxVal) / 2.0,
-            '#fee08b',
-            maxVal,
-            '#1a9850'
-          ]
+          'circle-color': isBedekkingsgraad
+            ? [
+                'step',
+                ['to-number', ['get', 'value'], 0],
+                '#808080',
+                0.0000001, '#006400',
+                1, '#2ca02c',
+                5, '#ffd700',
+                15, '#fdb462',
+                25, '#ff7f0e',
+                50, '#d95f02',
+                75, '#d73027'
+              ]
+            : [
+                'interpolate',
+                ['linear'],
+                ['get', 'value'],
+                minVal,
+                '#d73027',
+                (minVal + maxVal) / 2.0,
+                '#fee08b',
+                maxVal,
+                '#1a9850'
+              ]
         }
       });
     }
@@ -726,7 +757,8 @@ def render_swipe_map_html(
           .setLngLat(e.lngLat)
           .setHTML(
             '<b>Locatie:</b> ' +
-            p.locatie_id +
+            escapeHtml(p.locatie_id) +
+            projectLine(p) +
             '<br/><b>Waarde:</b> ' +
             v
           )
@@ -764,7 +796,8 @@ def render_swipe_map_html(
           .setLngLat(e.lngLat)
           .setHTML(
             '<b>Locatie:</b> ' +
-            p.locatie_id +
+            escapeHtml(p.locatie_id) +
+            projectLine(p) +
             '<br/><b>Waarde (' + __YEAR_RIGHT_JS__ + '):</b> ' +
             v
           )
@@ -829,19 +862,44 @@ def render_swipe_map_html(
 </html>
 """
 
+    is_bedekkingsgraad = 'bedekking' in str(metric_label).casefold()
+    if is_bedekkingsgraad:
+        legend_background = (
+            'linear-gradient(90deg, '
+            '#808080 0%, #808080 12.5%, '
+            '#006400 12.5%, #006400 25%, '
+            '#2ca02c 25%, #2ca02c 37.5%, '
+            '#ffd700 37.5%, #ffd700 50%, '
+            '#fdb462 50%, #fdb462 62.5%, '
+            '#ff7f0e 62.5%, #ff7f0e 75%, '
+            '#d95f02 75%, #d95f02 87.5%, '
+            '#d73027 87.5%, #d73027 100%)'
+        )
+        legend_min_label = '0%'
+        legend_max_label = '75%+'
+        legend_subtitle = '0 | 1 | 5 | 15 | 25 | 50 | 75%+'
+    else:
+        legend_background = 'linear-gradient(90deg, #d73027 0%, #fee08b 50%, #1a9850 100%)'
+        legend_min_label = f'{min_val:.1f}'
+        legend_max_label = f'{max_val:.1f}'
+        legend_subtitle = 'Laag naar hoog'
+
     html_str = (
         html_template
         .replace('__HEIGHT_PX__', str(int(height_px)))
         .replace('__YEAR_LEFT__', escape(str(year_left)))
         .replace('__YEAR_RIGHT__', escape(str(year_right)))
         .replace('__METRIC_LABEL__', escape(str(metric_label)))
-        .replace('__MIN_VAL__', f'{min_val:.1f}')
-        .replace('__MAX_VAL__', f'{max_val:.1f}')
+        .replace('__MIN_VAL__', legend_min_label)
+        .replace('__MAX_VAL__', legend_max_label)
         .replace('__STYLE_URL__', json.dumps(style_url))
         .replace('__LEFT_JSON__', left_json)
         .replace('__RIGHT_JSON__', right_json)
         .replace('__MIN_VAL_RAW__', repr(float(min_val)))
         .replace('__MAX_VAL_RAW__', repr(float(max_val)))
+        .replace('__IS_BEDEKKINGSGRAAD__', 'true' if is_bedekkingsgraad else 'false')
+        .replace('__LEGEND_BACKGROUND__', legend_background)
+        .replace('__LEGEND_SUBTITLE__', escape(legend_subtitle))
         .replace('__BOUNDS_JSON__', bounds_json)
         .replace('__CENTER_LAT__', repr(float(center_lat)))
         .replace('__CENTER_LON__', repr(float(center_lon)))

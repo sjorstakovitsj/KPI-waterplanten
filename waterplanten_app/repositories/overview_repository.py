@@ -41,50 +41,57 @@ def get_filtered_overview_frame(filters: DashboardFilters) -> pd.DataFrame:
 
 
 def get_previous_year_match(filters: DashboardFilters) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Laad alle actuele records en vergelijk met het laatst beschikbare eerdere jaar.
+
+    De actuele selectie is bewust onafhankelijk van historische beschikbaarheid.
+    Hierdoor blijven nieuw toegevoegde projecten, locaties en waterlichamen in de
+    KPI's zichtbaar, ook wanneer daarvoor nog geen eerder vergelijkingsjaar bestaat.
+    """
     if filters.year is None:
         return pd.DataFrame(), pd.DataFrame()
 
     con = ensure_gold_views()
-    scope_e = _where(filters, include_year=False, alias='e')
-    scope_prev = _where(filters, include_year=False, alias='pbase')
-    scope_curr = _where(filters, include_year=False, alias='c')
+    selected_year = int(filters.year)
+    scope_current = _where(filters, include_year=False, alias='c')
+    scope_previous = _where(filters, include_year=False, alias='pbase')
+    scope_history = _where(filters, include_year=False, alias='e')
 
-    prev_sql = f"""
-    WITH current_wb AS (
+    current_sql = f"""
+    SELECT c.*
+    FROM gold_ecology_base c
+    WHERE CAST(c.jaar AS INTEGER) = {selected_year}
+    {'AND ' + scope_current.replace('WHERE ', '') if scope_current else ''}
+    """
+    year_df = con.execute(current_sql).fetch_df()
+    if year_df.empty:
+        return year_df, pd.DataFrame()
+
+    previous_sql = f"""
+    WITH current_waterbodies AS (
         SELECT DISTINCT c.Waterlichaam
         FROM gold_ecology_base c
-        WHERE c.jaar = {int(filters.year)}
-        {'AND ' + scope_curr.replace('WHERE ', '') if scope_curr else ''}
+        WHERE CAST(c.jaar AS INTEGER) = {selected_year}
+        {'AND ' + scope_current.replace('WHERE ', '') if scope_current else ''}
     ),
-    prev_years AS (
+    previous_years AS (
         SELECT
             pbase.Waterlichaam,
-            MAX(CAST(pbase.jaar AS INTEGER)) AS prev_jaar
+            MAX(CAST(pbase.jaar AS INTEGER)) AS previous_year
         FROM gold_ecology_base pbase
-        WHERE CAST(pbase.jaar AS INTEGER) < {int(filters.year)}
-        {'AND ' + scope_prev.replace('WHERE ', '') if scope_prev else ''}
-        AND pbase.Waterlichaam IN (SELECT Waterlichaam FROM current_wb)
-        GROUP BY 1
+        WHERE CAST(pbase.jaar AS INTEGER) < {selected_year}
+        {'AND ' + scope_previous.replace('WHERE ', '') if scope_previous else ''}
+        AND pbase.Waterlichaam IN (SELECT Waterlichaam FROM current_waterbodies)
+        GROUP BY pbase.Waterlichaam
     )
     SELECT e.*
     FROM gold_ecology_base e
-    INNER JOIN prev_years p
+    INNER JOIN previous_years p
       ON e.Waterlichaam = p.Waterlichaam
-     AND CAST(e.jaar AS INTEGER) = p.prev_jaar
-    {scope_e}
+     AND CAST(e.jaar AS INTEGER) = p.previous_year
+    {scope_history}
     """
-    prev_df = con.execute(prev_sql).fetch_df()
-
-    current_sql = f"""
-    SELECT e.*
-    FROM gold_ecology_base e
-    WHERE e.jaar = {int(filters.year)}
-    {'AND ' + scope_e.replace('WHERE ', '') if scope_e else ''}
-    AND e.Waterlichaam IN (SELECT DISTINCT Waterlichaam FROM ({prev_sql}))
-    """
-    year_df = con.execute(current_sql).fetch_df()
+    prev_df = con.execute(previous_sql).fetch_df()
     return year_df, prev_df
-
 
 def get_waterbody_summary(filters: DashboardFilters) -> pd.DataFrame:
     con = ensure_gold_views()

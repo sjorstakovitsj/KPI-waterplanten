@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 
 import numpy as np
 import pandas as pd
@@ -19,8 +20,33 @@ def as_numeric(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s.astype(str).str.replace(',', '.', regex=False).str.replace('<', '', regex=False).str.replace('>', '', regex=False).str.strip(), errors='coerce')
 
 
-def filter_time_selection(df: pd.DataFrame, bodies: tuple[str, ...], species: str | None, show_ondergedoken: bool, show_chariden: bool) -> pd.DataFrame:
-    dfx = df[df['Waterlichaam'].isin(bodies)].copy() if bodies else df.copy()
+def filter_time_selection(
+    df: pd.DataFrame,
+    bodies: tuple[str, ...],
+    species: str | None,
+    show_ondergedoken: bool,
+    show_chariden: bool,
+    include_projects_outside_bodies: tuple[str, ...] = tuple(),
+) -> pd.DataFrame:
+    """Filter data, met optionele projecten buiten de waterlichaamselectie.
+
+    De extra projectselectie omzeilt alleen het waterlichaamfilter. Eventuele
+    soort- en groeivormfilters blijven ook voor deze projectrecords gelden.
+    Bestaande aanroepen behouden het oude gedrag door de lege standaardwaarde.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=getattr(df, 'columns', None))
+    if bodies and 'Waterlichaam' in df.columns:
+        selection_mask = df['Waterlichaam'].isin(bodies)
+    elif bodies:
+        selection_mask = pd.Series(False, index=df.index)
+    else:
+        selection_mask = pd.Series(True, index=df.index)
+    requested = {str(v).strip().casefold() for v in include_projects_outside_bodies if str(v).strip()}
+    if requested and 'Project' in df.columns:
+        projects = df['Project'].fillna('').astype(str).str.strip().str.casefold()
+        selection_mask |= projects.isin(requested)
+    dfx = df.loc[selection_mask].copy()
     for c in [c for c in ['bedekking_pct', 'doorzicht_m', 'diepte_m', 'lat', 'lon', 'jaar'] if c in dfx.columns]:
         dfx[c] = as_numeric(dfx[c])
     if species:
@@ -40,7 +66,6 @@ def filter_time_selection(df: pd.DataFrame, bodies: tuple[str, ...], species: st
             mask |= soort.str.startswith(("Chara", "Nitella", "Nitellopsis", "Tolypella"))
         return dfx.loc[mask].copy()
     return dfx
-
 
 def compute_trend_table(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     if df.empty or not {'locatie_id', 'jaar'}.issubset(df.columns):
@@ -470,11 +495,8 @@ def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame)
         map_df['n_jaren'] = np.nan
 
     map_df['abs_slope'] = pd.to_numeric(map_df['slope'], errors='coerce').abs().fillna(0)
-    max_abs_slope = float(map_df['abs_slope'].max()) if not map_df.empty else 0.0
-    if max_abs_slope <= 0:
-        map_df['marker_size'] = 12
-    else:
-        map_df['marker_size'] = 8 + 16 * (map_df['abs_slope'] / max_abs_slope)
+    # Kleine vaste markermaat; de regressiesterkte blijft zichtbaar in de popup.
+    map_df['marker_size'] = 7.0
 
     center = {'lat': float(map_df['lat'].mean()), 'lon': float(map_df['lon'].mean())}
 
@@ -484,7 +506,7 @@ def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame)
         lon='lon',
         color='Trend',
         size='marker_size',
-        size_max=24,
+        size_max=7,
         hover_name='locatie_id',
         hover_data={
             'Waterlichaam': True,
@@ -508,7 +530,29 @@ def build_regression_map_figure(df_filtered: pd.DataFrame, slopes: pd.DataFrame)
         title='Regressietrend per meetlocatie',
         height=650,
     )
-    fig.update_traces(marker=dict(opacity=0.85))
+    # Scattermap ondersteunt marker.line niet. Simuleer daarom een dunne
+    # zwarte rand met een iets grotere zwarte kopie onder iedere gekleurde trace.
+    original_traces = list(fig.data)
+    outline_traces = []
+    for trace in original_traces:
+        outline = copy.deepcopy(trace)
+        outline.name = None
+        outline.showlegend = False
+        outline.hoverinfo = 'skip'
+        outline.hovertemplate = None
+        outline.marker.color = 'black'
+        outline.marker.opacity = 0.95
+        outline.marker.size = 9
+        outline_traces.append(outline)
+
+        trace.marker.size = 7
+        trace.marker.opacity = 0.9
+
+    fig = go.Figure(
+        data=outline_traces + original_traces,
+        layout=fig.layout,
+        frames=fig.frames,
+    )
     fig.update_layout(
         margin=dict(l=0, r=0, t=50, b=0),
         legend=dict(title='Trend', orientation='h', yanchor='bottom', y=0.01, xanchor='left', x=0.01),
@@ -521,25 +565,62 @@ def build_compare_figure(df_trend: pd.DataFrame, metric_label: str, year_start: 
 
 
 def build_swipe_map_view(df_filtered: pd.DataFrame, metric: str, metric_label: str, year_left: int, year_right: int):
-    if year_left == year_right:
+    """Bouw de swipe-map en behoud de projectherkomst van meetlocaties."""
+    if year_left == year_right or df_filtered is None or df_filtered.empty:
         return None, None
+    required = {'locatie_id', 'jaar', 'lat', 'lon'}
+    if not required.issubset(df_filtered.columns):
+        return None, None
+    has_project = 'Project' in df_filtered.columns
+    group_cols = ['locatie_id', 'jaar'] + (['Project'] if has_project else [])
+    common_cols = ['locatie_id', 'jaar', 'lat', 'lon'] + (['Project'] if has_project else [])
     if metric == 'soort_count':
-        base = df_filtered[['locatie_id', 'jaar', 'lat', 'lon', 'soort']].dropna(subset=['locatie_id', 'jaar', 'lat', 'lon']).copy(); src = base.groupby(['locatie_id', 'jaar'], sort=False, observed=True).agg(lat=('lat', 'first'), lon=('lon', 'first'), soort_count=('soort', 'nunique')).reset_index(); metric_col = 'soort_count'
+        if 'soort' not in df_filtered.columns:
+            return None, None
+        base = df_filtered[common_cols + ['soort']].copy()
+        metric_col = 'soort_count'
     else:
         if metric not in df_filtered.columns:
             return None, None
-        base = df_filtered[['locatie_id', 'jaar', 'lat', 'lon', metric]].dropna(subset=['locatie_id', 'jaar', 'lat', 'lon']).copy(); base[metric] = as_numeric(base[metric]); src = base.groupby(['locatie_id', 'jaar'], sort=False, observed=True).agg(lat=('lat', 'first'), lon=('lon', 'first'), **{metric: (metric, 'mean')}).reset_index(); metric_col = metric
-    left = src[src['jaar'].eq(year_left)][['locatie_id', 'lat', 'lon', metric_col]].rename(columns={metric_col: 'value'}).copy(); right = src[src['jaar'].eq(year_right)][['locatie_id', 'lat', 'lon', metric_col]].rename(columns={metric_col: 'value'}).copy()
-    gj_left, gj_right = df_to_geojson_points(left, 'value', 'locatie_id'), df_to_geojson_points(right, 'value', 'locatie_id')
-    bounds_df = pd.concat([left, right], ignore_index=True).dropna(subset=['lat', 'lon']); bounds = [float(bounds_df['lon'].min()), float(bounds_df['lat'].min()), float(bounds_df['lon'].max()), float(bounds_df['lat'].max())] if len(bounds_df) >= 2 else None
-    center_lat = float(src['lat'].mean()) if not src.empty else 52.5; center_lon = float(src['lon'].mean()) if not src.empty else 5.5
-    values = as_numeric(src.get(metric_col, pd.Series(dtype='float')))
-    min_val = float(np.nanmin(values.values)) if len(values) else 0.0; max_val = float(np.nanmax(values.values)) if len(values) else 1.0
+        base = df_filtered[common_cols + [metric]].copy()
+        base[metric] = as_numeric(base[metric])
+        metric_col = metric
+    for col in ['jaar', 'lat', 'lon']:
+        base[col] = as_numeric(base[col])
+    required_values = ['locatie_id', 'jaar', 'lat', 'lon'] + ([] if metric == 'soort_count' else [metric])
+    base = base.dropna(subset=required_values)
+    if has_project:
+        base['Project'] = base['Project'].fillna('Onbekend').astype(str).str.strip().replace('', 'Onbekend')
+    if metric == 'soort_count':
+        src = base.groupby(group_cols, sort=False, observed=True).agg(
+            lat=('lat', 'first'), lon=('lon', 'first'), soort_count=('soort', 'nunique')
+        ).reset_index()
+    else:
+        src = base.groupby(group_cols, sort=False, observed=True).agg(
+            lat=('lat', 'first'), lon=('lon', 'first'), **{metric: (metric, 'mean')}
+        ).reset_index()
+    if src.empty:
+        return None, None
+    map_cols = ['locatie_id', 'lat', 'lon', metric_col] + (['Project'] if has_project else [])
+    left = src.loc[src['jaar'].eq(year_left), map_cols].rename(columns={metric_col: 'value'}).copy()
+    right = src.loc[src['jaar'].eq(year_right), map_cols].rename(columns={metric_col: 'value'}).copy()
+    gj_left = df_to_geojson_points(left, 'value', 'locatie_id')
+    gj_right = df_to_geojson_points(right, 'value', 'locatie_id')
+    bounds_df = pd.concat([left, right], ignore_index=True).dropna(subset=['lat', 'lon'])
+    bounds = [float(bounds_df['lon'].min()), float(bounds_df['lat'].min()), float(bounds_df['lon'].max()), float(bounds_df['lat'].max())] if len(bounds_df) >= 2 else None
+    center_lat = float(src['lat'].mean()) if not src.empty else 52.5
+    center_lon = float(src['lon'].mean()) if not src.empty else 5.5
+    values = as_numeric(src[metric_col]).dropna()
+    min_val = float(values.min()) if not values.empty else 0.0
+    max_val = float(values.max()) if not values.empty else 1.0
     if not np.isfinite(min_val): min_val = 0.0
     if not np.isfinite(max_val) or max_val == min_val: max_val = min_val + 1.0
-    map_html = render_swipe_map_html(geojson_left=gj_left, geojson_right=gj_right, year_left=year_left, year_right=year_right, metric_label=metric_label, min_val=min_val, max_val=max_val, center_lat=center_lat, center_lon=center_lon, zoom=9.0, height_px=650, bounds=bounds)
+    map_html = render_swipe_map_html(
+        geojson_left=gj_left, geojson_right=gj_right, year_left=year_left, year_right=year_right,
+        metric_label=metric_label, min_val=min_val, max_val=max_val, center_lat=center_lat,
+        center_lon=center_lon, zoom=9.0, height_px=650, bounds=bounds
+    )
     return map_html, {'min': min_val, 'max': max_val, 'label': metric_label}
-
 
 def build_heatmap_figure(df: pd.DataFrame, bodies: tuple[str, ...]):
     heat_base = df[df['Waterlichaam'].isin(bodies)].copy() if bodies else df.copy()

@@ -49,14 +49,27 @@ def categorize_slope_trend(val, threshold):
     return 'Stabiel ➡️'
 
 
-def get_location_metric_mean(dataframe: pd.DataFrame, metric_col: str):
-    """Gemiddelde van een locatie-parameter via unieke CollectieReferentie."""
-    if dataframe.empty or metric_col not in dataframe.columns:
+def get_location_metric_mean(dataframe: pd.DataFrame, metric_col: str) -> float:
+    """Gemiddelde per unieke collectie, robuust voor lege en niet-numerieke waarden."""
+    if dataframe is None or dataframe.empty or metric_col not in dataframe.columns:
         return 0.0
+
+    values = pd.to_numeric(dataframe[metric_col], errors='coerce')
     if 'CollectieReferentie' not in dataframe.columns:
-        return dataframe[metric_col].mean()
-    per_sample = dataframe.groupby('CollectieReferentie')[metric_col].first()
-    return per_sample.mean()
+        mean_value = values.mean()
+        return 0.0 if pd.isna(mean_value) else float(mean_value)
+
+    samples = pd.DataFrame({
+        'CollectieReferentie': dataframe['CollectieReferentie'],
+        metric_col: values,
+    }).dropna(subset=[metric_col])
+    if samples.empty:
+        return 0.0
+
+    # dropna=False voorkomt dat records zonder collectie-ID volledig verdwijnen.
+    per_sample = samples.groupby('CollectieReferentie', dropna=False)[metric_col].first()
+    mean_value = per_sample.mean()
+    return 0.0 if pd.isna(mean_value) else float(mean_value)
 
 
 def calculate_kpi(curr_df: pd.DataFrame, prev_df: pd.DataFrame, metric_col: str, is_loc_metric: bool = False):

@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 from streamlit.components.v1 import html
 from utils import get_sorted_species_list, load_data
 from waterplanten_app.services.time_trend_service import build_all_trophic_species_trend_figure, build_compare_figure, build_heatmap_figure, build_regression_map_figure, build_regression_outputs, build_swipe_map_view, compute_trend_table, filter_time_selection
@@ -24,6 +25,7 @@ WATERLICHAAM_KARAKTERISTIEKEN = {
     'Eemmeer': {'voedselrijkdom': 'zeer rijk', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'kort'},
     'Wolderwijd': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
     'Nuldernauw': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
+    'Nijkerkernauw': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
     'Veluwemeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'middel', 'verblijftijd': 'lang'},
     'Drontermeer': {'voedselrijkdom': 'matig', 'diepte': 'ondiep', 'grootte': 'klein', 'verblijftijd': 'lang'},
     'Vossemeer': {'voedselrijkdom': 'rijk', 'diepte': 'ondiep', 'grootte': 'klein'},
@@ -62,12 +64,22 @@ waterbody_options = [
     and _matches_characteristic(wb, 'verblijftijd', verblijftijd_filter, VERBLIJFTIJD_OPTIONS)
 ]
 
-bodies = tuple(st.sidebar.multiselect('Selecteer waterlichaam / waterlichamen', waterbody_options, default=waterbody_options[:1]))
+DEFAULT_WATERLICHAMEN = ('Gooimeer', 'Eemmeer', 'Nijkerkernauw')
+default_waterbodies = [wb for wb in DEFAULT_WATERLICHAMEN if wb in waterbody_options]
+if not default_waterbodies and waterbody_options:
+    default_waterbodies = waterbody_options[:1]
+
+bodies = tuple(st.sidebar.multiselect(
+    'Selecteer waterlichaam / waterlichamen',
+    waterbody_options,
+    default=default_waterbodies,
+))
+selected_waterbodies_label = ', '.join(bodies) if bodies else 'Alle beschikbare waterlichamen'
 species = select_optional_species(df, get_sorted_species_list(df))
 
 st.sidebar.subheader('Extra kaartfilter')
-show_ondergedoken = st.sidebar.checkbox('Onder­gedoken waterplanten', value=False, disabled=bool(species))
-show_chariden = st.sidebar.checkbox('Chariden (kranswieren)', value=False, disabled=bool(species))
+show_ondergedoken = st.sidebar.checkbox('Onder­gedoken waterplanten (bèta)', value=False, disabled=bool(species))
+show_chariden = st.sidebar.checkbox('Chariden (kranswieren) (bèta)', value=False, disabled=bool(species))
 
 metric_options = {'Bedekkingsgraad (%)': 'bedekking_pct'} if species else {'Bedekkingsgraad (%)': 'bedekking_pct', 'Doorzicht (m)': 'doorzicht_m', 'Diepte (m)': 'diepte_m', 'Soortenrijkdom': 'soort_count'}
 metric_label = st.sidebar.selectbox('Kies analysevariabele', list(metric_options.keys()))
@@ -82,14 +94,37 @@ trend = compute_trend_table(filtered, metric)
 years = sorted(filtered['jaar'].dropna().astype(int).unique().tolist()) if 'jaar' in filtered.columns else []
 
 st.subheader('Kaart – resultaten voor een gekozen jaar')
-if len(years) >= 2:
+include_n2000_swipe = st.checkbox(
+    'Toon ook meetlocaties uit project N2000',
+    value=True,
+    help=(
+        'Voegt N2000-meetlocaties toe aan de swipe map, ook wanneer hun locatiecode '
+        'niet aan een geselecteerd waterlichaam is gekoppeld. De overige analyses '
+        'blijven gebaseerd op de normale waterlichaamselectie.'
+    ),
+)
+swipe_filtered = filter_time_selection(
+    df,
+    bodies,
+    species,
+    show_ondergedoken,
+    show_chariden,
+    include_projects_outside_bodies=('N2000',) if include_n2000_swipe else tuple(),
+)
+swipe_years = (
+    sorted(pd.to_numeric(swipe_filtered['jaar'], errors='coerce').dropna().astype(int).unique().tolist())
+    if 'jaar' in swipe_filtered.columns else []
+)
+if len(swipe_years) >= 2:
     c1, c2 = st.columns(2)
-    y1 = c1.selectbox('Jaar links', years, index=max(0, len(years) - 2))
-    y2 = c2.selectbox('Jaar rechts', years, index=len(years) - 1)
+    default_left_index = swipe_years.index(2021) if 2021 in swipe_years else max(0, len(swipe_years) - 2)
+    default_right_index = swipe_years.index(2024) if 2024 in swipe_years else len(swipe_years) - 1
+    y1 = c1.selectbox('Jaar links', swipe_years, index=default_left_index)
+    y2 = c2.selectbox('Jaar rechts', swipe_years, index=default_right_index)
     if y1 == y2:
         st.warning('Kies twee verschillende jaren voor de swipe-vergelijking.')
     else:
-        swipe_html, legend = build_swipe_map_view(filtered, metric, metric_label, int(y1), int(y2))
+        swipe_html, legend = build_swipe_map_view(swipe_filtered, metric, metric_label, int(y1), int(y2))
         if swipe_html:
             html(swipe_html, height=670)
             render_gradient_legend(legend['label'], legend['min'], legend['max'])
@@ -145,12 +180,14 @@ else:
             st.info(f'Geen geschikte trofieniveau-trenddata gevonden voor {wb}.')
 
 st.subheader('Regressieanalyse: verbetert of verslechtert de toestand?')
+st.caption(f'Geselecteerde waterlichamen: **{selected_waterbodies_label}**')
 pie, slopes, _ = build_regression_outputs(trend, metric)
 if pie is None:
     st.warning('Geen locaties gevonden met minimaal 5 jaar aan meetgegevens in de huidige selectie.')
 else:
     regression_map, regression_map_msg = build_regression_map_figure(filtered, slopes)
     if regression_map:
+        regression_map.update_layout(title=f'Regressietrend per meetlocatie | {selected_waterbodies_label}')
         st.plotly_chart(regression_map, width='stretch')
     else:
         st.info(regression_map_msg)
@@ -162,8 +199,10 @@ else:
 
 st.divider()
 st.subheader('Soortenaanwezigheid heatmap (top 50)')
+st.caption(f'Geselecteerde waterlichamen: **{selected_waterbodies_label}**')
 fig, msg = build_heatmap_figure(df, bodies)
 if fig:
+    fig.update_layout(title=f'Ontwikkeling bedekking, top 50 soorten | {selected_waterbodies_label}')
     st.plotly_chart(fig, width='stretch')
 else:
     st.info(msg)
