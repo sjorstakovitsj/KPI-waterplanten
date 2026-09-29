@@ -12,11 +12,41 @@ Repositories en services horen deze helpers direct uit
 """
 
 from typing import Dict
+import re
+import unicodedata
 
 import numpy as np
 import pandas as pd
 
 from waterplanten_app.config.mappings import EXCLUDED_SPECIES_CODES, RWS_GROEIVORM_CODES
+
+
+def normalize_species_name(value: object) -> str:
+    """Maak een stabiele, hoofdletterongevoelige koppelsleutel voor soortnamen.
+
+    De oorspronkelijke soortnaam blijft behouden voor weergave. Alleen Unicode,
+    omliggende witruimte, herhaalde witruimte en hoofdlettergebruik worden
+    genormaliseerd. Auteursnamen en taxonomische inhoud worden niet verwijderd.
+    """
+    if value is None or pd.isna(value):
+        return ""
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text.casefold()
+
+
+def add_species_match_key(
+    df: pd.DataFrame,
+    source_column: str = "soort",
+    target_column: str = "species_match_key",
+) -> pd.DataFrame:
+    """Voeg zonder mutatie van de invoer een genormaliseerde soortkoppelsleutel toe."""
+    result = df.copy()
+    if source_column not in result.columns:
+        result[target_column] = pd.Series("", index=result.index, dtype="string")
+        return result
+    result[target_column] = result[source_column].map(normalize_species_name).astype("string")
+    return result
 
 
 def get_species_group_mapping() -> Dict[str, str]:

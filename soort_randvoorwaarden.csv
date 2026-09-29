@@ -1,0 +1,81 @@
+﻿soortnaam;ind_pH;gg_pH;min_pH;max_pH;ind_sal;gg_sal;min_sal;max_sal;perc_bicarb;perc_cl;perc_so4;ind_alk;gg_alk;min_alk;max_alk;ind_bodem;bodemtype;ind_os_bodem;gg_os_bodem;os_bodem;ind_redox;gg_redox;redox;ind_carb;gg_carb;carb_bodem
+Apium inundatum;2;6.9;6;7.3;3;4.4;4;9;3;;;3;0.9;0.5;1;3;zandig (leem);;11;mineraal tot matig organisch;2;76.8;matig oxiderend;1;4.9;carbonaatarm
+Azolla filiculoides;1;7.3;7.3;8.5;2;17.5;15;50;;3;;2;3.5;2;4;;;1;29;mineraal tot organisch;3;-218.5;zeer reductief;2;217.6;carbonaatrijk
+Callitriche hamulata;2;6.4;6;7.3;2;3.0;2;4;-3;;3;3;0.6;0.5;1;3;zand;3;2;mineraal;3;24.1;matig oxiderend;1;1.5;carbonaatarm
+Callitriche obtusangula;2;8.0;7.3;8.5;2;14.5;9;15;2;;-2;2;4.5;4;8;;;1;23;mineraal tot organisch;2;-139.4;reductief;2;511.9;zeer carbonaatrijk
+Callitriche platycarpa;1;7.2;6;7.3;2;10.1;9;15;1;-3;;1;3.4;2;4;1;alle types, excl silt;1;7;mineraal en licht organisch;1;-64;matig reductief;;245.1;indifferent
+Ceratophyllum demersum;1;7.8;7.3;8.5;2;13.8;9;15;1;3;-2;2;3.4;2;4;1;alle types, excl silt;;25;licht- tot organisch;1;-199.1;zeer reductief;1;247.7;carbonaatrijk
+Ceratophyllum submersum;3;8.8;8.5;10;3;26.6;15;50;3;;-3;3;6.6;4;8;;;3;7;mineraal en licht organisch;2;-194.3;zeer reductief;2;487.7;zeer carbonaatrijk
+Chara globularis;2;7.6;7.3;8.5;3;5.5;4;9;;;;2;1.7;1;2;2;zandig,zand- en silthoudende leem en zandige klei;1;21;mineraal tot organisch;1;-15.6;matig reductief;1;203;carbonaatrijk
+Chara hispida;3;8.0;7.3;8.5;1;9.1;9;15;;;;3;2.7;2;4;;;;16;mineraal tot matig organisch;1;-145.3;reductief;3;390.1;zeer carbonaatrijk
+Chara vulgaris;2;8.1;7.3;8.5;2;12.1;9;15;;;;2;3;2;4;;;;15;mineraal tot matig organisch;1;-119.9;reductief;2;388;zeer carbonaatrijk
+Draadwier;2;8.2;7.3;8.5;;;;;;3;-1;1;3.7;2;4;1;alle types, excl silt en leem;;32;licht- tot organisch;1;-148.2;reductief;;288;indifferent
+Echinodorus ranunculoides;2;7.3;7.3;8.5;2;6.4;4;9;;;;3;1.8;1;2;3;zandig (leem);1;7;mineraal en licht organisch;2;50.3;matig oxiderend;1;359.7;carbonaatrijk
+Echinodorus repens;3;6.5;6;7.3;3;5.2;4;9;;;;3;0.8;0.5;1;3;zand;2;36;licht- tot organisch;2;80.5;matig oxiderend;2;0.7;zeer carbonaatarm
+Elatine hexandra;2;7.3;7.3;8.5;;;;;-2;;3;2;0.4;0.1;0.5;3;zand;3;2;mineraal;3;147.6;oxiderend;3;0.1;zeer carbonaatarm
+Eleocharis acicularis;1;7.2;6;7.3;2;5.2;4;9;;-1;;2;1.1;1;2;3;zandig (leem);3;3;mineraal;2;58.7;matig oxiderend;1;42.5;matig carbonaatrijk
+Elodea canadensis;1;7.4;7.3;8.5;2;6.3;4;9;3;-3;;1;2.3;2;4;;;2;6;mineraal en licht organisch;1;-109.8;reductief;1;58.7;matig carbonaatrijk
+Elodea nuttallii;1;7.6;7.3;8.5;1;10.1;9;15;;;;1;2.8;2;4;;alle types;;17;mineraal tot matig organisch;;-136.7;indifferent;;206;indifferent
+Enteromorpha species;3;8.4;7.3;8.5;3;54.9;30;100;;3;-2;2;5.4;4;8;;;1;35;licht- tot organisch;3;-232.9;zeer reductief;2;374.9;zeer carbonaatrijk
+Fontinalis antipyretica;3;7.9;7.3;8.5;2;7.1;4;9;2;;-1;3;3.4;2;4;;;;;;;;;;;
+Glyceria fluitans;;7.1;5;10;1;8.6;4;9;;-3;3;;1.8;0.1;8;;alle types, excl leem;;11;mineraal tot matig organisch;;11.4;indifferent;;24.7;indifferent
+Hippuris vulgaris;2;7.8;7.3;8.5;2;26;15;50;;2;-3;2;5.3;4;8;;;1;18;licht- tot matig organisch;2;-128.5;reductief;1;215.4;carbonaatrijk
+Hottonia palustris;1;7.1;6;7.3;2;6.7;4;9;;;;1;1.8;1;2;1;alle types, excl silt en leem;;20;mineraal tot matig organisch;1;-68.2;matig reductief;1;9.8;carbonaatarm
+Hydrocharis morsus-ranae;1;7.5;7.3;8.5;2;7.2;4;9;3;;-3;2;2.4;2;4;1;alle types, excl silt en leem;;29;licht- tot organisch;1;-171.2;reductief;1;73.1;matig carbonaatrijk
+Hydrocotyle vulgaris;;;;;;;;;;;;;;;;;;;;;1;67.2;matig oxiderend;1;5.1;carbonaatarm
+Hypericum elodes;3;5.6;5;6;3;3.5;2;4;-3;-1;3;3;0.3;0.1;0.5;3;zandig,zand- en silthoudend;2;22;licht- tot matig organisch;1;-10.9;matig reductief;2;1.8;carbonaatarm
+Juncus bulbosus;2;4.8;4;5;3;3.1;2;4;-3;-3;3;2;0.3;0.1;0.5;2;zandig,zand- en silthoudende leem en zandige klei;;20;mineraal tot matig organisch;1;110.3;oxiderend;2;0.5;zeer carbonaatarm
+Lemna gibba;1;7.7;7.3;8.5;1;17.2;15;50;1;3;-3;2;4.2;4;8;;alle types;;27;licht- tot organisch;2;-209.3;zeer reductief;1;223.5;carbonaatrijk
+Lemna minor;1;7.5;7.3;8.5;1;9.6;9;15;2;;;1;2.5;2;4;;alle types;;21;licht- tot organisch;;-122.4;indifferent;;68.6;indifferent
+Lemna trisulca;1;7.8;7.3;8.5;1;11.7;9;15;3;2;-3;1;3.1;2;4;1;alle types, excl silt;;30;licht- tot organisch;1;-186.8;zeer reductief;;108.5;indifferent
+Littorella uniflora;2;5.8;5;6;1;4.7;4;9;-3;;3;2;0.4;0.1;0.5;3;zand;3;2;mineraal;2;167.4;oxiderend;3;21.6;matig carbonaatrijk
+Lobelia dortmanna;;;;;;;;;-2;;2;;;;;;;;;;;;;;;
+Luronium natans;1;5.8;5;6;2;3.6;2;4;-3;;3;2;0.4;0.1;0.5;3;zandig,zand- en silthoudend;2;5;mineraal en licht organisch;2;76.2;matig oxiderend;2;0.5;zeer carbonaatarm
+Myriophyllum alterniflorum;3;6.8;6;7.3;2;3.3;2;4;-1;;1;3;0.7;0.5;1;2;zandig (leem);2;9;mineraal en licht organisch;2;-50.2;matig reductief;3;0.8;zeer carbonaatarm
+Myriophyllum spicatum;3;8.5;8.5;10;2;17.7;15;50;;3;;2;3.5;2;4;1;alle types, excl silt;;19;mineraal tot matig organisch;1;-196.1;zeer reductief;2;288.1;carbonaatrijk
+Myriophyllum verticillatum;2;7.6;7.3;8.5;2;8.1;4;9;;;;2;2.5;2;4;;;2;6;mineraal en licht organisch;2;-155;reductief;;223.8;indifferent
+Nasturtium microphyllum;;;;;;;;;;;;;;;;;;;;;2;-157;reductief;2;113.5;matig carbonaatrijk
+Nitella flexilis;2;6.9;6;7.3;3;4.3;4;9;;1;;3;1.1;1;2;;;3;3;mineraal;3;-9.2;matig reductief;3;0.9;zeer carbonaatarm
+Nuphar lutea;1;7.1;6;7.3;1;8.1;4;9;3;;-3;1;2.4;2;4;;alle types, excl silt;;25;licht- tot organisch;1;-153.5;reductief;;112.9;indifferent
+Nymphaea alba;;6.3;5;10;1;8.2;4;9;;;;;1.6;0.1;8;;alle types;1;35;licht- tot organisch;1;-149.4;reductief;;76.3;indifferent
+Nymphaea candida;2;6.8;6;7.3;3;8.1;4;9;3;;-3;2;2.7;2;4;;;;32;licht- tot organisch;2;-117.4;reductief;1;109.7;matig carbonaatrijk
+Nymphoides peltata;2;7.8;7.3;8.5;2;10.6;9;15;2;;-1;2;3.2;2;4;1;klei en leem, soms zandig;1;18;licht- tot matig organisch;1;-170.3;reductief;2;237.5;carbonaatrijk
+Peplis portula;2;6.2;6;7.3;;;;;-3;;3;2;0.4;0.1;0.5;3;zandig (leem);2;7;mineraal en licht organisch;2;153.3;oxiderend;3;0.3;zeer carbonaatarm
+Pilularia globulifera;2;6.3;6;7.3;;;;;-3;-3;3;3;0.6;0.5;1;3;zandig (leem);2;7;mineraal en licht organisch;1;1.5;matig oxiderend;2;0.8;zeer carbonaatarm
+Polygonum amphibium;;;;;;;;;;;;;;;;;;;;;1;-76.5;matig reductief;;116.3;indifferent
+Potamogeton acutifolius;1;7.6;7.3;8.5;2;6.8;4;9;2;;-2;2;2.3;2;4;;alle types, excl silt;;25;licht- tot organisch;2;-167.4;reductief;2;15.5;carbonaatarm
+Potamogeton alpinus;1;7.6;7.3;8.5;3;6.9;4;9;2;-2;;2;2.6;2;4;;;;14;mineraal tot matig organisch;2;-134.2;reductief;2;8.4;carbonaatarm
+Potamogeton berchtoldii;2;7.8;7.3;8.5;2;7.5;4;9;3;;-3;2;3.4;2;4;;;2;18;licht- tot matig organisch;3;-136.7;reductief;3;18.7;carbonaatarm
+Potamogeton compressus;2;7.4;7.3;8.5;3;4.7;4;9;3;;-3;3;1.6;1;2;2;alle types, excl silt en leem;;25;licht- tot organisch;1;-159.4;reductief;1;12.4;carbonaatarm
+Potamogeton crispus;1;7.7;7.3;8.5;2;8.7;4;9;3;-3;;1;3.5;2;4;;;2;4;mineraal;2;-109.1;reductief;1;342.4;carbonaatrijk
+Potamogeton densus;3;7.7;7.3;8.5;2;9.4;9;15;3;-3;;2;4.2;4;8;;;2;6;mineraal en licht organisch;1;-92;matig reductief;2;264.9;carbonaatrijk
+Potamogeton gramineus;2;7.6;7.3;8.5;2;5.8;4;9;1;;;3;1.8;1;2;3;zandig (leem);2;12;mineraal en licht organisch;1;-3.8;matig reductief;;194.7;indifferent
+Potamogeton lucens;2;7.7;7.3;8.5;2;8.2;4;9;3;;-3;3;3;2;4;;alle types, excl silt en leem;;11;mineraal tot matig organisch;2;-156.1;reductief;2;348.3;carbonaatrijk
+Potamogeton mucronatus;1;7.8;7.3;8.5;2;12.3;9;15;3;;-2;2;4.9;4;8;;;2;20;licht- tot matig organisch;2;-178.7;zeer reductief;2;352;carbonaatrijk
+Potamogeton natans;1;6.9;6;7.3;2;6.3;4;9;;-2;;1;1.3;1;2;1;alle types, excl silt en leem;;16;mineraal tot matig organisch;1;-73.2;matig reductief;1;6.4;carbonaatarm
+Potamogeton obtusifolius;1;7.2;6;7.3;2;6;4;9;;;;2;1.4;1;2;;;1;29;mineraal tot organisch;2;-115.1;reductief;2;0.8;zeer carbonaatarm
+Potamogeton pectinatus;2;8.3;7.3;8.5;1;25;15;50;;2;;2;4.3;4;8;;alle types, excl silt;;20;licht- tot organisch;1;-176;zeer reductief;2;479.8;zeer carbonaatrijk
+Potamogeton perfoliatus;2;8.0;7.3;8.5;2;7.8;4;9;3;-2;;2;2.9;2;4;;;2;3;mineraal;1;-102.8;reductief;2;77.1;matig carbonaatrijk
+Potamogeton polygonifolius;3;6.4;6;7.3;2;3.6;2;4;-2;-2;3;3;0.7;0.5;1;;;;18;mineraal tot matig organisch;2;45.9;matig oxiderend;2;2.9;carbonaatarm
+Potamogeton pusillus;2;8.0;7.3;8.5;1;11.1;9;15;;;;2;3;2;4;1;alle types, excl leem;1;23;mineraal tot organisch;;-133;indifferent;;217.7;indifferent
+Potamogeton trichoides;1;7.7;7.3;8.5;2;9.2;9;15;3;;-2;2;3.2;2;4;1;klei en leem, soms zandig;2;7;mineraal en licht organisch;2;-143.1;reductief;1;117.8;matig carbonaatrijk
+Ranunculus aquatilis;2;7.9;7.3;8.5;2;13.1;9;15;3;;-3;2;4.5;4;8;;;1;18;licht- tot matig organisch;2;-124.5;reductief;2;339.9;carbonaatrijk
+Ranunculus baudotii;3;9.1;8.5;10;2;35.7;30;100;;;-2;2;5.2;4;8;;;1;8;mineraal en licht organisch;2;-151.9;reductief;2;382.4;zeer carbonaatrijk
+Ranunculus circinatus;2;8.2;7.3;8.5;2;11;9;15;2;;-3;2;3.2;2;4;1;alle types, excl silt en leem;;24;licht- tot organisch;1;-166.3;reductief;1;272.2;carbonaatrijk
+Ranunculus flammula;1;6.8;6;7.3;2;5.5;4;9;;-3;3;2;1;1;2;2;zandig,zand- en silthoudend;2;7;mineraal en licht organisch;2;116.4;oxiderend;2;0.5;zeer carbonaatarm
+Ranunculus ololeucos;2;4.9;4;5;;;;;-3;;3;3;0.3;0.1;0.5;3;zandig (leem);1;12;mineraal en licht organisch;2;-28.5;matig reductief;3;0.5;zeer carbonaatarm
+Ranunculus peltatus;2;6.8;6;7.3;2;3.1;2;4;-3;-2;3;3;0.7;0.5;1;2;zandig,zand- en silthoudend;2;7;mineraal en licht organisch;2;139.3;oxiderend;2;0.5;zeer carbonaatarm
+Ranunculus trichophyllus;2;8.2;7.3;8.5;2;9.5;9;15;1;-2;;2;3.3;2;4;;;2;8;mineraal en licht organisch;1;32.9;matig oxiderend;2;454.6;zeer carbonaatrijk
+Riccia fluitans;1;6.8;6;7.3;2;6.2;4;9;;;;1;1.2;1;2;;alle types, excl silt en leem;1;26;mineraal tot organisch;1;-105.9;reductief;1;15.2;carbonaatarm
+Scirpus fluitans;2;6.4;6;7.3;3;4.8;4;9;-3;;3;2;0.7;0.5;1;3;zandig,zand- en silthoudend;;15;mineraal tot matig organisch;2;105.4;oxiderend;2;1.7;carbonaatarm
+Sparganium minimum;2;5.8;5;6;3;3.3;2;4;;-1;;3;0.8;0.5;1;3;zand;2;32;mineraal tot organisch;2;63.1;matig oxiderend;3;1.5;carbonaatarm
+Sphagnum species;3;4.1;4;5;3;1.6;1;2;-3;;3;3;0;0;0.1;3;zandig,zand- en silthoudend;;31;licht- tot organisch;2;182.5;oxiderend;2;0.4;zeer carbonaatarm
+Spirodela polyrhiza;2;7.6;7.3;8.5;2;9.8;9;15;3;2;-3;2;3;2;4;;alle types, excl silt;;28;licht- tot organisch;1;-179;zeer reductief;;130.9;indifferent
+Stratiotes aloides;1;7.6;7.3;8.5;2;7.3;4;9;3;;-3;3;2.3;2;4;;alle types, excl silt;;30;licht- tot organisch;1;-175.2;zeer reductief;1;35.1;matig carbonaatrijk
+Utricularia australis;1;5.8;5;6;2;3.4;2;4;;;;1;0.6;0.5;1;3;zandig,zand- en silthoudend;2;19;licht- tot matig organisch;3;-99.5;matig reductief;2;2.7;carbonaatarm
+Utricularia minor;2;4.4;4;5;3;2.0;1;2;-3;1;3;3;0.1;0;0.1;;;2;49;licht- tot organisch;2;84.5;matig oxiderend;2;6.1;carbonaatarm
+Utricularia vulgaris;2;7.5;7.3;8.5;2;6.9;4;9;3;;-3;2;2.5;2;4;;;;33;licht- tot organisch;1;-167.6;reductief;2;25.7;matig carbonaatrijk
+Veronica catenata;;;;;;;;;;;;;;;;;;;;;3;-139.1;reductief;2;412.8;zeer carbonaatrijk
+Wolffia arrhiza;2;7.5;7.3;8.5;2;10.8;9;15;2;;-1;3;3.7;2;4;;;;;;;;;;;
+Zannichellia palustris;3;8.2;7.3;8.5;1;10.9;9;15;;;;2;3.3;2;4;;;1;9;mineraal en licht organisch;2;-119.7;reductief;3;436.7;zeer carbonaatrijk
+Zannichellia pedunculata;3;9.0;8.5;10;3;53;30;100;;3;-3;3;7;4;8;;;;21;licht- tot organisch;2;-217;zeer reductief;2;304.9;carbonaatrijk

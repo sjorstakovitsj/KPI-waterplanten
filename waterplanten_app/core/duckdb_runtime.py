@@ -49,6 +49,22 @@ def _mtime_or_zero(path: Path) -> float:
         return 0.0
 
 
+
+def _path_fingerprint(path: Path) -> tuple[str, int, int]:
+    """Lichte cachesleutel: absoluut pad, wijzigingstijd in ns en grootte."""
+    resolved = Path(path).resolve()
+    try:
+        stat = resolved.stat()
+        return (resolved.as_posix(), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return (resolved.as_posix(), 0, 0)
+
+
+def _paths_fingerprint(*paths: Path) -> tuple[tuple[str, int, int], ...]:
+    """Combineer meerdere bestandsfingerprints tot een hashbare sleutel."""
+    return tuple(_path_fingerprint(Path(path)) for path in paths)
+
+
 def _write_parquet_from_pandas(df: pd.DataFrame, path: Path) -> None:
     """Schrijf Parquet met pyarrow indien beschikbaar, anders pandas."""
     path.parent.mkdir(parents=True, exist_ok=True)

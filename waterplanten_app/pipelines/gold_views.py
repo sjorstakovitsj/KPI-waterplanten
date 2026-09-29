@@ -3,9 +3,38 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from waterplanten_app.config.settings import FINAL_PARQUET
+from waterplanten_app.config.settings import (
+    FINAL_PARQUET,
+    PIPELINE_VERSION,
+    SOIL_PROFILES_PIPELINE_VERSION,
+)
+from waterplanten_app.config.soil_diagnosis_config import SOIL_PROFILES_VIEW
 from waterplanten_app.config.mappings import RWS_GROEIVORM_CODES
-from waterplanten_app.core.duckdb_runtime import _get_duckdb
+from waterplanten_app.core.duckdb_runtime import (
+    _get_duckdb,
+    _paths_fingerprint,
+)
+from waterplanten_app.pipelines.soil_profiles_pipeline import ensure_soil_profiles_parquet
+
+
+
+_GOLD_VIEW_STATE: dict[int, tuple[object, ...]] = {}
+
+
+def clear_gold_view_state(con=None) -> None:
+    """Forceer viewregistratie bij de volgende aanroep."""
+    if con is None:
+        _GOLD_VIEW_STATE.clear()
+    else:
+        _GOLD_VIEW_STATE.pop(id(con), None)
+
+
+def _gold_view_fingerprint(profile_path: Path) -> tuple[object, ...]:
+    return (
+        *_paths_fingerprint(Path(FINAL_PARQUET), Path(profile_path)),
+        str(PIPELINE_VERSION),
+        str(SOIL_PROFILES_PIPELINE_VERSION),
+    )
 
 
 def _quote(value: str) -> str:
@@ -36,7 +65,16 @@ def _display_expr(cols: list[str], display_col: str, raw_col: str, default: str 
     return f"'{default}'"
 
 
-def ensure_gold_views(con=None):
+def _ensure_soil_diagnosis_views(con, profile_path: Path) -> None:
+    """Registreer het reeds gecontroleerde profiel-Parquet als gold-view."""
+    con.execute(
+        f"CREATE OR REPLACE VIEW {SOIL_PROFILES_VIEW} AS "
+        f"SELECT * FROM read_parquet({_quote(profile_path.as_posix())})"
+    )
+
+
+def ensure_gold_views(con=None, force: bool = False):
+    """Registreer views alleen als bronfingerprint of pipelineversie wijzigt."""
     con = con or _get_duckdb()
     if con is None:
         raise RuntimeError('DuckDB is niet beschikbaar.')
@@ -44,6 +82,12 @@ def ensure_gold_views(con=None):
     parquet_path = Path(FINAL_PARQUET)
     if not parquet_path.exists():
         raise FileNotFoundError(f'FINAL_PARQUET niet gevonden: {parquet_path}')
+
+    profile_path = ensure_soil_profiles_parquet()
+    fingerprint = _gold_view_fingerprint(profile_path)
+    connection_key = id(con)
+    if not force and _GOLD_VIEW_STATE.get(connection_key) == fingerprint:
+        return con
 
     excl = _sql_in(tuple(RWS_GROEIVORM_CODES))
     p = parquet_path.as_posix().replace("'", "''")
@@ -180,6 +224,9 @@ def ensure_gold_views(con=None):
     WHERE rn = 1
     """)
 
+    _ensure_soil_diagnosis_views(con, profile_path)
+    _GOLD_VIEW_STATE[connection_key] = fingerprint
+
     return con
 
 
@@ -195,4 +242,5 @@ def list_gold_views() -> list[str]:
         'gold_spatial_krw_counts',
         'gold_spatial_weighted_krw',
         'gold_spatial_dominant_trophic',
+        'gold_soil_species_profiles',
     ]

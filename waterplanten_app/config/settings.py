@@ -18,6 +18,25 @@ COORD_CACHE_PARQUET = CACHE_DIR / 'coord_cache.parquet'
 PIPELINE_VERSION = '2026-03-27_duckdb_parquet_coords_v4_n2000_as_entity'
 
 # ============================================================================
+# BODEMDIAGNOSE / SOORTSPECIFIEKE STANDPLAATSPROFIELEN
+# ============================================================================
+SOIL_PROFILES_SOURCE = BASE_DIR / 'soort_randvoorwaarden.csv'
+SOIL_PROFILES_PARQUET = CACHE_DIR / 'soil_species_profiles.parquet'
+SOIL_PROFILES_METADATA = CACHE_DIR / 'soil_species_profiles.meta.json'
+SOIL_PROFILES_PIPELINE_VERSION = '2026-09-29_soil_species_profiles_v1'
+
+
+# ============================================================================
+# PRESTATIES / CACHE / TRENDANALYSE
+# ============================================================================
+SOIL_DIAGNOSIS_CACHE_TTL_SECONDS = None
+SOIL_DIAGNOSIS_CACHE_MAX_ENTRIES = 32
+SOIL_BOOTSTRAP_ITERATIONS_FAST = 200
+SOIL_BOOTSTRAP_ITERATIONS_STANDARD = 1000
+SOIL_BOOTSTRAP_ITERATIONS_EXTENDED = 5000
+SOIL_BOOTSTRAP_DEFAULT_MODE = 'fast'
+
+# ============================================================================
 # BRONSELECTIE / DD-ECO API V3
 # ============================================================================
 # Primaire bron voor ecologische data. Mogelijke waarden:

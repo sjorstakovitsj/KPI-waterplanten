@@ -16,6 +16,54 @@ TROFIE = {'oligotroof': '#2ca02c', 'mesotroof': '#1f77b4', 'eutroof': '#ff7f0e',
 SOORTGROEP = {'chariden': '#1b9e77', 'iseotiden': '#7570b3', 'parvopotamiden': '#d95f02', 'magnopotamiden': '#66a61e', 'myriophylliden': '#e7298a', 'vallisneriiden': '#e6ab02', 'elodeiden': '#a6761d', 'stratiotiden': '#1f78b4', 'pepliden': '#b2df8a', 'batrachiiden': '#fb9a99', 'nymphaeiden': '#cab2d6', 'haptofyten': '#fdbf6f', 'Overig / Individueel': '#999999', NO_MATCH: '#9e9e9e'}
 
 RELEASE_NOTES = [
+        {
+        "date": "29 september 2026",
+        "title": "Bodemdiagnose en trends",
+        "sections": {
+            "Nieuwe bodemdiagnose": [
+                (
+                    "Een nieuwe bodemdiagnose toont op basis van aangetroffen "
+                    "plantensoorten aanwijzingen voor kenmerken van de waterlaag "
+                    "en waterbodem."
+                ),
+                (
+                    "De resultaten zijn beschikbaar per waterlichaam, meetlocatie "
+                    "en meetjaar."
+                ),
+            ],
+            "Trends door de tijd": [
+                (
+                    "Ontwikkelingen worden weergegeven met boxplots per meetjaar. "
+                    "Onderbrekingen zonder meetdata zijn gemarkeerd met gestippelde lijnen."
+                ),
+                (
+                    "Een optionele formele analyse berekent een robuuste trend, "
+                    "onzekerheidsinterval en gevoeligheid voor verschillende "
+                    "berekeningsmethoden."
+                ),
+            ],
+            "Duiding van resultaten": [
+                (
+                    "De resultaten bevatten uitleg over het tijdspatroon, verschillen "
+                    "tussen locaties, bemonsteringskwaliteit en onzekerheid."
+                ),
+                (
+                    "Numerieke indicaties zijn waar mogelijk vertaald naar begrijpelijke "
+                    "ecologische klassen, met aanvullende uitleg per karakteristiek."
+                ),
+            ],
+            "Snelheid en gebruiksgemak": [
+                (
+                    "Gegevens en berekende resultaten worden hergebruikt, waardoor "
+                    "schakelen tussen waterlichaam, trends en meetlocaties sneller verloopt."
+                ),
+                (
+                    "De formele trendanalyse wordt alleen uitgevoerd wanneer de gebruiker "
+                    "daar expliciet voor kiest."
+                ),
+            ],
+        },
+    },
     {
         "date": "10 september 2026",
         "title": "Kaarten, trends en gebruiksgemak",
