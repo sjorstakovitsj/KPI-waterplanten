@@ -265,3 +265,58 @@ DIAGNOSIS_USE_EXISTING_CATEGORY: Final[tuple[str, ...]] = (
     "perc_cl",
     "perc_so4",
 )
+
+# ============================================================================
+# OSM-KAART VOOR INTERPRETATIE BODEMTOESTAND
+# ============================================================================
+SOIL_MAP_DEFAULT_PARAMETER_KEY: Final[str] = "salinity"
+SOIL_MAP_HEIGHT: Final[int] = 600
+SOIL_MAP_POINT_RADIUS: Final[int] = 110
+SOIL_TREND_ICON_TILE_SIZE: Final[int] = 128
+SOIL_TREND_ICON_CONTENT_SIZE: Final[int] = 92
+SOIL_TREND_ICON_PLOT_SIZE: Final[int] = 30
+SOIL_TREND_ICON_MIN_PIXELS: Final[int] = 26
+SOIL_TREND_ICON_MAX_PIXELS: Final[int] = 34
+SOIL_MAP_OSM_TILE_URL: Final[str] = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+SOIL_MAP_OSM_ATTRIBUTION: Final[str] = "© OpenStreetMap-bijdragers"
+SOIL_MAP_UNKNOWN_COLOR: Final[tuple[int, int, int, int]] = (158, 158, 158, 190)
+
+SOIL_MAP_CLASS_COLORS: Final[dict[str, tuple[int, int, int, int]]] = {
+    # Algemene en pH-klassen
+    "Zuur water": (49, 130, 189, 220),
+    "Neutraal water": (120, 198, 121, 220),
+    "Basisch water": (255, 193, 7, 220),
+    # Saliniteit / ionenrijkdom
+    "Zeer ionenarm water": (0, 104, 55, 220),
+    "Ionenarm water": (102, 189, 99, 220),
+    "Matig ionenrijk water": (255, 221, 51, 220),
+    "Ionenrijk water": (255, 127, 0, 220),
+    "Zeer ionenrijk water": (215, 25, 28, 220),
+    # Alkaliniteit
+    "Ongebufferd (zuur) water": (49, 54, 149, 220),
+    "Zeer zacht water": (69, 117, 180, 220),
+    "Zacht water": (116, 173, 209, 220),
+    "Zacht tot matig hard water": (171, 217, 233, 220),
+    "Hard water": (253, 174, 97, 220),
+    "Zeer hard water": (215, 25, 28, 220),
+    # Redox
+    "Zeer reductief": (128, 0, 38, 220),
+    "Reductief": (189, 0, 38, 220),
+    "Matig reductief": (244, 109, 67, 220),
+    "Matig oxiderend": (102, 189, 99, 220),
+    "Oxiderend": (0, 104, 55, 220),
+    # Carbonaat
+    "Zeer carbonaatarm": (49, 54, 149, 220),
+    "Carbonaatarm": (69, 117, 180, 220),
+    "Matig carbonaatrijk": (255, 221, 51, 220),
+    "Carbonaatrijk": (255, 127, 0, 220),
+    "Zeer carbonaatrijk": (215, 25, 28, 220),
+    # Anionassociaties
+    "Zeer sterke negatieve associatie": (49, 54, 149, 220),
+    "Sterke negatieve associatie": (69, 117, 180, 220),
+    "Zwakke negatieve associatie": (116, 173, 209, 220),
+    "Geen duidelijke associatie": (189, 189, 189, 220),
+    "Zwakke positieve associatie": (253, 174, 97, 220),
+    "Sterke positieve associatie": (244, 109, 67, 220),
+    "Zeer sterke positieve associatie": (178, 24, 43, 220),
+}

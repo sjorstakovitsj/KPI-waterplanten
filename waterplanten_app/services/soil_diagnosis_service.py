@@ -29,6 +29,7 @@ from waterplanten_app.core.soil_diagnosis_calculations import (
     calculate_all_diagnoses,
     calculate_descriptive_trend,
     calculate_location_diagnosis_records,
+    calculate_location_mann_kendall_trends,
     calculate_theil_sen_slope,
     classify_formal_trend,
     compare_trend_scenarios,
@@ -43,9 +44,11 @@ from waterplanten_app.domain.soil_diagnosis import (
     TrendQualityAssessment,
     TrendScenarioComparison,
     WaterbodyDiagnosisResult,
+    WaterbodyTrendMapResult,
 )
 from waterplanten_app.repositories.soil_diagnosis_repository import (
     get_available_locations as repository_get_available_locations,
+    get_coordinate_metadata,
     get_species_profile_matches,
     get_waterbody_species_profile_matches,
     get_waterbody_trend_species_profile_matches,
@@ -106,6 +109,116 @@ def get_soil_diagnosis(filters: DashboardFilters, location_id: str, weighting: s
     )
 
 
+
+def _first_non_null(series: pd.Series):
+    values = series.dropna()
+    return values.iloc[0] if not values.empty else None
+
+
+def _build_map_locations(
+    matches: pd.DataFrame,
+    location_records: pd.DataFrame,
+    overview: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Bouw een lange, UI-neutrale kaartdataset zonder bestaande diagnoses te wijzigen."""
+    coordinate_columns = [
+        column
+        for column in ("latitude", "longitude", "rd_x", "rd_y")
+        if column in matches.columns
+    ]
+    if matches.empty or "locatie_id" not in matches.columns:
+        return pd.DataFrame(), {
+            "coordinate_metadata": get_coordinate_metadata(),
+            "location_count": 0,
+            "wgs84_location_count": 0,
+            "rd_location_count": 0,
+        }
+
+    aggregations = {column: (column, _first_non_null) for column in coordinate_columns}
+    coordinates = (
+        matches.groupby("locatie_id", as_index=False)
+        .agg(**aggregations)
+        if aggregations
+        else matches[["locatie_id"]].drop_duplicates().copy()
+    )
+    coordinates["locatie_id"] = coordinates["locatie_id"].astype(str)
+
+    map_frame = location_records.copy()
+    if map_frame.empty:
+        return map_frame, {
+            "coordinate_metadata": get_coordinate_metadata(),
+            "location_count": int(coordinates["locatie_id"].nunique()),
+            "wgs84_location_count": 0,
+            "rd_location_count": 0,
+        }
+
+    map_frame["locatie_id"] = map_frame["location_id"].astype(str)
+    map_frame = map_frame.merge(coordinates, on="locatie_id", how="left")
+
+    overview_for_map = overview.copy()
+    if not overview_for_map.empty:
+        overview_for_map["locatie_id"] = overview_for_map["location_id"].astype(str)
+        overview_columns = [
+            column
+            for column in (
+                "locatie_id",
+                "observed_species_count",
+                "matched_species_count",
+                "unmatched_species_count",
+                "profile_coverage",
+            )
+            if column in overview_for_map.columns
+        ]
+        map_frame = map_frame.merge(
+            overview_for_map[overview_columns].drop_duplicates("locatie_id"),
+            on="locatie_id",
+            how="left",
+            suffixes=("", "_overview"),
+        )
+
+    category_lookup = {
+        (str(row.location_id), str(row.parameter_key)): str(row.category)
+        for row in location_records.itertuples()
+        if str(getattr(row, "category", "")).strip()
+    }
+    interpretations = []
+    for row in map_frame.itertuples():
+        parameter_key = str(row.parameter_key)
+        companion = None
+        if parameter_key == "organic_matter":
+            companion = category_lookup.get((str(row.location_id), "os_bodem"))
+        interpretations.append(
+            interpret_diagnosis_value(
+                parameter_key=parameter_key,
+                value=row.value,
+                category=str(getattr(row, "category", "")),
+                companion_category=companion,
+            )
+        )
+    map_frame["interpretation"] = interpretations
+
+    for column in ("latitude", "longitude", "rd_x", "rd_y"):
+        if column not in map_frame:
+            map_frame[column] = pd.NA
+        map_frame[column] = pd.to_numeric(map_frame[column], errors="coerce")
+
+    map_frame["has_wgs84"] = (
+        map_frame["latitude"].between(-90, 90)
+        & map_frame["longitude"].between(-180, 180)
+    )
+    map_frame["has_rd"] = map_frame["rd_x"].notna() & map_frame["rd_y"].notna()
+
+    map_metadata = {
+        "coordinate_metadata": get_coordinate_metadata(),
+        "location_count": int(map_frame["locatie_id"].nunique()),
+        "wgs84_location_count": int(map_frame.loc[map_frame["has_wgs84"], "locatie_id"].nunique()),
+        "rd_location_count": int(map_frame.loc[map_frame["has_rd"], "locatie_id"].nunique()),
+        "parameter_count": int(map_frame["parameter_key"].nunique()),
+        "default_parameter_key": "salinity" if "salinity" in set(map_frame["parameter_key"]) else str(map_frame["parameter_key"].iloc[0]),
+    }
+    return map_frame, map_metadata
+
+
 def get_waterbody_diagnosis(filters: DashboardFilters, weighting: str = WEIGHTING_PRESENCE) -> WaterbodyDiagnosisResult:
     _validate_weighting(weighting)
     if len(filters.waterbodies) != 1:
@@ -120,6 +233,11 @@ def get_waterbody_diagnosis(filters: DashboardFilters, weighting: str = WEIGHTIN
         "matched_species_count": "Soorten met profiel", "unmatched_species_count": "Soorten zonder profiel",
         "profile_coverage": "Profieldekking",
     }).drop(columns=["jaar"], errors="ignore")
+    map_locations, map_metadata = _build_map_locations(
+        matches=matches,
+        location_records=location_records,
+        overview=overview,
+    )
     strong = [p for p in parameters if p.evidence_strength == "Sterke aanwijzing" and p.central_value is not None]
     selected = strong[:4] or [p for p in parameters if p.central_value is not None][:4]
     parameter_map = {item.parameter_key: item for item in parameters}
@@ -146,6 +264,7 @@ def get_waterbody_diagnosis(filters: DashboardFilters, weighting: str = WEIGHTIN
         filters=filters, waterbody=str(filters.waterbodies[0]), weighting=weighting,
         summary=summary, parameter_diagnoses=tuple(parameters),
         location_diagnoses=location_records, location_overview=display_overview,
+        map_locations=map_locations, map_metadata=map_metadata,
         metadata={"location_count": location_count, "median_profile_coverage": float(overview["profile_coverage"].median()) if not overview.empty else 0.0, "parameter_count": len(parameters), "strong_parameter_count": len(strong)},
     )
 
@@ -181,6 +300,21 @@ def _scenario_from_collection(
     return selected_annual.sort_values("jaar") if not selected_annual.empty else selected_annual, selected_locations
 
 
+
+def _build_trend_map(matches: pd.DataFrame, location_year_diagnoses: pd.DataFrame, waterbody: str, parameter_key: str, parameter_label: str, minimum_years: int) -> WaterbodyTrendMapResult:
+    trends=calculate_location_mann_kendall_trends(location_year_diagnoses,parameter_key,parameter_label,minimum_years)
+    coordinate_columns=[c for c in ("latitude","longitude","rd_x","rd_y") if c in matches.columns]
+    if matches.empty or "locatie_id" not in matches.columns: coordinates=pd.DataFrame(columns=["location_id",*coordinate_columns])
+    else:
+        aggregations={c:(c,_first_non_null) for c in coordinate_columns}; coordinates=matches.groupby("locatie_id",as_index=False).agg(**aggregations) if aggregations else matches[["locatie_id"]].drop_duplicates().copy(); coordinates=coordinates.rename(columns={"locatie_id":"location_id"}); coordinates["location_id"]=coordinates["location_id"].astype(str)
+    locations=trends.merge(coordinates,on="location_id",how="left")
+    for c in ("latitude","longitude","rd_x","rd_y"):
+        if c not in locations: locations[c]=pd.NA
+        locations[c]=pd.to_numeric(locations[c],errors="coerce")
+    locations["has_wgs84"]=locations["latitude"].between(-90,90)&locations["longitude"].between(-180,180); locations["has_rd"]=locations["rd_x"].notna()&locations["rd_y"].notna(); usable=locations[locations["tau"].notna()]
+    metadata={"coordinate_metadata":get_coordinate_metadata(),"location_count":int(locations["location_id"].nunique()),"tested_location_count":int(usable["location_id"].nunique()),"insufficient_location_count":int(locations["tau"].isna().sum()),"statistically_supported_count":int(locations["statistically_supported"].fillna(False).sum()),"wgs84_location_count":int(locations.loc[locations["has_wgs84"],"location_id"].nunique()),"rd_location_count":int(locations.loc[locations["has_rd"],"location_id"].nunique()),"minimum_years":int(minimum_years),"alpha":0.05,"median_tau":float(usable["tau"].median()) if not usable.empty else None,"median_sen_slope_per_year":float(pd.to_numeric(usable["sen_slope_per_year"],errors="coerce").median()) if not usable.empty and usable["sen_slope_per_year"].notna().any() else None,"class_counts":locations["classification"].value_counts(dropna=False).to_dict(),"tau_method":"Kendall Tau-b, tweezijdig","slope_method":"Sen-helling per kalenderjaar"}
+    return WaterbodyTrendMapResult(waterbody,parameter_key,parameter_label,minimum_years,locations,metadata)
+
 def _formal_analysis(annual: pd.DataFrame, detail: pd.DataFrame, recurring_count: int, total_locations: int, iterations: int) -> tuple[TrendEstimate, TrendQualityAssessment]:
     quality = TrendQualityAssessment(**assess_trend_quality(
         annual, recurring_count, total_locations, MIN_FORMAL_TREND_YEARS,
@@ -211,6 +345,18 @@ def _attach_interpretation(result):
     limits=["Geen directe water- of bodemmeting.","Verschillen in locaties, soorten en profieldekking kunnen jaaruitkomsten beïnvloeden."]
     if t.get("missing_years"): limits.append("De tijdreeks bevat meetonderbrekingen.")
     result.interpretation=TrendInterpretation(f"{classification}: {direction} tijdspatroon",str(t["text"]),str(sp["text"]),str(sa["text"]),str(u["text"]),meaning,tuple(limits)); return result
+
+
+def _build_all_trend_maps(matches: pd.DataFrame, location_year_diagnoses: pd.DataFrame, waterbody: str, minimum_years: int) -> dict[str, WaterbodyTrendMapResult]:
+    """Bereken lokale kaarttrends voor alle parameters eenmalig."""
+    if location_year_diagnoses.empty: return {}
+    labels=location_year_diagnoses[["parameter_key","parameter_label"]].drop_duplicates().sort_values("parameter_label")
+    result={}
+    for row in labels.itertuples(index=False):
+        key,label=str(row.parameter_key),str(row.parameter_label)
+        selected=location_year_diagnoses.loc[location_year_diagnoses["parameter_key"].astype(str).eq(key)].copy()
+        result[key]=_build_trend_map(matches,selected,waterbody,key,label,minimum_years)
+    return result
 
 def get_waterbody_trends(
     filters: DashboardFilters,
@@ -243,6 +389,11 @@ def get_waterbody_trends(
         summary=f"Beschrijvende ontwikkeling: {str(descriptive['direction']).lower()}.",
         metadata={**descriptive, "available_location_count": total_locations, "recurring_location_count": len(recurring)},
     )
+    scenario_records = collections[weighting][0]
+    if location_mode == TREND_RECURRING_LOCATIONS:
+        scenario_records = scenario_records.loc[scenario_records["location_id"].isin(recurring)].copy()
+    result.trend_maps = _build_all_trend_maps(matches, scenario_records, str(filters.waterbodies[0]), max(int(minimum_years), 3))
+    result.trend_map = result.trend_maps.get(parameter_key)
     if not include_formal_analysis:
         return _attach_interpretation(_attach_boxplot_metadata(result))
 

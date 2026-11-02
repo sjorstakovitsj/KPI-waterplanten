@@ -6,6 +6,7 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+from scipy.stats import kendalltau
 
 from waterplanten_app.config.soil_diagnosis_config import (
     ANION_CLASS_BREAKS,
@@ -538,6 +539,33 @@ def aggregate_annual_waterbody_diagnoses(location_year_diagnoses: pd.DataFrame) 
             records.append({'jaar':int(year),'parameter_key':p.parameter_key,'parameter_label':p.parameter_label,'central_value':p.central_value,'category':p.category,'p25':p.lower_quartile,'p75':p.upper_quartile,'minimum':p.minimum_value,'maximum':p.maximum_value,'location_count':p.location_count,'sufficient_location_count':p.sufficient_location_count,'location_coverage':p.location_coverage,'evidence_strength':p.evidence_strength,'unit':p.unit})
     return pd.DataFrame(records)
 
+
+
+def classify_kendall_tau(tau: float | None) -> str:
+    if tau is None or not math.isfinite(tau): return "Onvoldoende gegevens"
+    if tau <= -0.60: return "Sterk dalend"
+    if tau <= -0.30: return "Dalend"
+    if tau < 0.30: return "Weinig consistente richting"
+    if tau < 0.60: return "Stijgend"
+    return "Sterk stijgend"
+
+
+def calculate_location_mann_kendall_trends(location_year_diagnoses: pd.DataFrame, parameter_key: str, parameter_label: str, minimum_years: int = 5, alpha: float = 0.05) -> pd.DataFrame:
+    """Bereken Tau-b, tweezijdige p-waarde en Sen-helling per locatie."""
+    output_columns=("location_id","parameter_key","parameter_label","tau","p_value","sen_slope_per_year","classification","statistically_supported","year_count","first_year","last_year","missing_year_count","first_value","last_value","latest_interpretation","median_profile_coverage","minimum_profile_coverage","median_species_count","evidence_strength")
+    required={"jaar","location_id","parameter_key","value"}
+    if location_year_diagnoses.empty or not required.issubset(location_year_diagnoses.columns): return pd.DataFrame(columns=output_columns)
+    frame=location_year_diagnoses.loc[location_year_diagnoses["parameter_key"].astype(str).eq(str(parameter_key))].copy(); frame["jaar"]=pd.to_numeric(frame["jaar"],errors="coerce"); frame["value"]=pd.to_numeric(frame["value"],errors="coerce"); frame=frame.dropna(subset=["jaar","location_id","value"])
+    records=[]
+    for location_id,group in frame.groupby("location_id",sort=True):
+        annual=group.groupby("jaar",as_index=False).agg(value=("value","median"),profile_coverage=("profile_coverage","median"),species_count=("species_count","median")).sort_values("jaar")
+        years=annual["jaar"].astype(int).to_numpy(); values=annual["value"].astype(float).to_numpy(); n=len(annual); first=int(years[0]) if n else None; last=int(years[-1]) if n else None; missing=int(last-first+1-n) if first is not None and last is not None else 0
+        tau=pvalue=slope=None
+        if n>=minimum_years and len(set(values.tolist()))>1:
+            test=kendalltau(years,values,variant="b",method="auto",nan_policy="omit"); tau=float(test.statistic) if test.statistic is not None and math.isfinite(float(test.statistic)) else None; pvalue=float(test.pvalue) if test.pvalue is not None and math.isfinite(float(test.pvalue)) else None; slope=calculate_theil_sen_slope(annual.rename(columns={"value":"central_value"}))
+        latest=float(values[-1]) if n else None; supported=bool(pvalue is not None and pvalue<alpha)
+        records.append({"location_id":str(location_id),"parameter_key":str(parameter_key),"parameter_label":str(parameter_label),"tau":tau,"p_value":pvalue,"sen_slope_per_year":slope,"classification":classify_kendall_tau(tau),"statistically_supported":supported,"year_count":n,"first_year":first,"last_year":last,"missing_year_count":missing,"first_value":float(values[0]) if n else None,"last_value":latest,"latest_interpretation":str(interpret_diagnosis_value(parameter_key,latest) if latest is not None else "Geen informatie"),"median_profile_coverage":float(annual["profile_coverage"].median()),"minimum_profile_coverage":float(annual["profile_coverage"].min()),"median_species_count":float(annual["species_count"].median()),"evidence_strength":"Statistisch ondersteund" if supported else "Niet statistisch ondersteund" if tau is not None else "Onvoldoende gegevens"})
+    return pd.DataFrame(records,columns=output_columns)
 
 def prepare_annual_boxplot_data(location_year_diagnoses: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, tuple[int, ...], tuple[int, ...]]:
     """Maak locatiewaarden, jaarlijkse boxstatistieken en ontbrekende jaren."""

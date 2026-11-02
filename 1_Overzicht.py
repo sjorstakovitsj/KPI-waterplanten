@@ -17,6 +17,39 @@ SOORTGROEP = {'chariden': '#1b9e77', 'iseotiden': '#7570b3', 'parvopotamiden': '
 
 RELEASE_NOTES = [
         {
+    "date": "2 november 2026",
+    "title": "Interactieve kaarten voor de bodemdiagnose",
+    "sections": {
+        "Nieuwe kaartfuncties": [
+            (
+                "De weergaven Waterlichaam, Detail meetlocatie en Trends door de tijd "
+                "bevatten nu interactieve OSM-kaarten."
+            ),
+            (
+                "In Detail meetlocatie kan rechtstreeks op een ander meetpunt worden "
+                "geklikt om de bijbehorende diagnose en soortenonderbouwing te openen."
+            ),
+        ],
+        "Lokale trends": [
+            (
+                "Trendpictogrammen tonen per locatie een stijgende, dalende, stabiele "
+                "of onbekende ontwikkeling."
+            ),
+            (
+                "De kaart toont aanvullende informatie over Tau, p-waarde, "
+                "Sen-helling, meetjaren en statistische ondersteuning."
+            ),
+        ],
+        "Snelheid en gebruiksgemak": [
+            (
+                "Wisselen tussen kaartparameters en meetlocaties gebruikt reeds "
+                "berekende resultaten en veroorzaakt geen onnodige herberekeningen."
+            ),
+        ],
+    },
+},
+        
+        {
         "date": "29 september 2026",
         "title": "Bodemdiagnose en trends",
         "sections": {

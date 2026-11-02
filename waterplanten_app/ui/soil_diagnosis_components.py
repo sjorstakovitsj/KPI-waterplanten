@@ -1,5 +1,8 @@
 from __future__ import annotations
 from collections.abc import Sequence
+import base64
+import io
+from pathlib import Path
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -9,6 +12,18 @@ from waterplanten_app.config.soil_diagnosis_config import (
     DIAGNOSIS_USE_EXISTING_CATEGORY,
     DIAGNOSIS_VALUE_CLASS_BREAKS,
     PARAMETER_EXPLAINERS,
+    SOIL_MAP_CLASS_COLORS,
+    SOIL_MAP_DEFAULT_PARAMETER_KEY,
+    SOIL_MAP_HEIGHT,
+    SOIL_MAP_OSM_ATTRIBUTION,
+    SOIL_MAP_OSM_TILE_URL,
+    SOIL_MAP_POINT_RADIUS,
+    SOIL_MAP_UNKNOWN_COLOR,
+    SOIL_TREND_ICON_CONTENT_SIZE,
+    SOIL_TREND_ICON_MAX_PIXELS,
+    SOIL_TREND_ICON_MIN_PIXELS,
+    SOIL_TREND_ICON_PLOT_SIZE,
+    SOIL_TREND_ICON_TILE_SIZE,
     TREND_BOOTSTRAP_MODE_DEFAULT,
     TREND_BOOTSTRAP_MODE_LABELS,
     TREND_FORMAL_ANALYSIS_DEFAULT,
@@ -208,6 +223,249 @@ def _interpret_diagnosis_table(
     return output
 
 
+
+@st.cache_resource(show_spinner=False)
+def _rd_to_wgs84_transformer():
+    """Maak de RD-WGS84-transformer pas aan wanneer de kaart deze nodig heeft."""
+    from pyproj import Transformer
+
+    return Transformer.from_crs("EPSG:28992", "EPSG:4326", always_xy=True)
+
+
+def _normalise_map_coordinates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Gebruik WGS84 indien aanwezig en zet anders Nederlandse RD om naar WGS84."""
+    output = frame.copy()
+    for column in ("latitude", "longitude", "rd_x", "rd_y"):
+        if column not in output:
+            output[column] = pd.NA
+        output[column] = pd.to_numeric(output[column], errors="coerce")
+
+    valid_wgs84 = output["latitude"].between(-90, 90) & output["longitude"].between(-180, 180)
+    use_rd = ~valid_wgs84 & output["rd_x"].notna() & output["rd_y"].notna()
+    if use_rd.any():
+        longitudes, latitudes = _rd_to_wgs84_transformer().transform(
+            output.loc[use_rd, "rd_x"].to_numpy(),
+            output.loc[use_rd, "rd_y"].to_numpy(),
+        )
+        output.loc[use_rd, "longitude"] = longitudes
+        output.loc[use_rd, "latitude"] = latitudes
+
+    valid = output["latitude"].between(-90, 90) & output["longitude"].between(-180, 180)
+    return output.loc[valid].copy()
+
+
+def _map_color(interpretation: object) -> list[int]:
+    """Koppel een interpretatie aan een consistente, kleurenblindvriendelijke kleur."""
+    text = str(interpretation).strip()
+    direct = SOIL_MAP_CLASS_COLORS.get(text)
+    if direct is not None:
+        return list(direct)
+    # Saliniteit bevat aanvullend '(zoet water)' of '(brak water)'.
+    for label, color in SOIL_MAP_CLASS_COLORS.items():
+        if text.startswith(label):
+            return list(color)
+    return list(SOIL_MAP_UNKNOWN_COLOR)
+
+
+def _hex_color(rgba: list[int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgba[:3])
+
+
+def _render_map_legend(frame: pd.DataFrame) -> None:
+    rows = (
+        frame[["interpretation", "map_color"]]
+        .drop_duplicates("interpretation")
+        .sort_values("interpretation")
+    )
+    items = []
+    for row in rows.itertuples():
+        color = _hex_color(list(row.map_color))
+        items.append(
+            f'<span style="display:inline-flex;align-items:center;margin:0 16px 8px 0;">'
+            f'<span style="width:12px;height:12px;border-radius:50%;background:{color};'
+            f'border:1px solid #444;margin-right:6px;"></span>{row.interpretation}</span>'
+        )
+    st.markdown("**Legenda**<br>" + "".join(items), unsafe_allow_html=True)
+
+
+def render_waterbody_soil_map(result: WaterbodyDiagnosisResult) -> None:
+    """Render een OSM-puntenkaart met één geselecteerde bodemtoestandparameter."""
+    try:
+        import pydeck as pdk
+    except ImportError:
+        st.warning(
+            "De kaartmodule is niet beschikbaar. Installeer pydeck en pyproj; "
+            "de overige bodemdiagnosefuncties blijven wel bruikbaar."
+        )
+        return
+
+    source = getattr(result, "map_locations", pd.DataFrame()).copy()
+    if source.empty:
+        st.info(
+            "De kaart kan niet worden weergegeven omdat nog geen kaartgegevens voor "
+            "de geselecteerde waterlichaamdiagnose beschikbaar zijn."
+        )
+        return
+
+    required = {"parameter_key", "parameter_label", "location_id", "interpretation"}
+    if not required.issubset(source.columns):
+        st.warning("De kaartdataset mist noodzakelijke diagnosevelden.")
+        return
+
+    labels = (
+        source[["parameter_key", "parameter_label"]]
+        .drop_duplicates()
+        .sort_values("parameter_label")
+    )
+    label_to_key = dict(zip(labels["parameter_label"], labels["parameter_key"]))
+    key_to_label = dict(zip(labels["parameter_key"], labels["parameter_label"]))
+    default_key = str(
+        getattr(result, "map_metadata", {}).get(
+            "default_parameter_key", SOIL_MAP_DEFAULT_PARAMETER_KEY
+        )
+    )
+    if default_key not in key_to_label:
+        default_key = str(labels["parameter_key"].iloc[0])
+    option_labels = list(label_to_key)
+    default_index = option_labels.index(key_to_label[default_key])
+
+    left, right = st.columns([2, 1])
+    with left:
+        selected_label = st.selectbox(
+            "Karakteristiek op de kaart",
+            option_labels,
+            index=default_index,
+            key="soil_waterbody_map_parameter",
+        )
+    with right:
+        sufficient_only = st.toggle(
+            "Alleen voldoende informatie",
+            value=False,
+            key="soil_waterbody_map_sufficient_only",
+            help="Verberg locaties met onvoldoende informatie of zonder bruikbare interpretatie.",
+        )
+
+    parameter_key = str(label_to_key[selected_label])
+    frame = source.loc[source["parameter_key"].astype(str).eq(parameter_key)].copy()
+    if sufficient_only and "evidence_strength" in frame:
+        frame = frame.loc[
+            ~frame["evidence_strength"].astype(str).isin(
+                ["Geen informatie", "Onvoldoende informatie"]
+            )
+        ].copy()
+
+    frame = _normalise_map_coordinates(frame)
+    if frame.empty:
+        metadata = getattr(result, "map_metadata", {})
+        coordinate_metadata = metadata.get("coordinate_metadata", {})
+        st.warning(
+            "Voor de geselecteerde locaties zijn geen bruikbare WGS84- of "
+            "Rijksdriehoekscoördinaten gevonden. Herkende bronkolommen: "
+            f"{coordinate_metadata or 'geen'}."
+        )
+        return
+
+    frame["interpretation"] = frame["interpretation"].fillna("Onvoldoende informatie").astype(str)
+    frame["map_color"] = frame["interpretation"].map(_map_color)
+    frame["value_display"] = frame["value"].map(
+        lambda value: f"{value:.3f}" if isinstance(value, (int, float)) and pd.notna(value) else str(value)
+    )
+    frame["coverage_display"] = pd.to_numeric(
+        frame.get("profile_coverage", pd.Series(index=frame.index, dtype=float)),
+        errors="coerce",
+    ).map(lambda value: f"{value:.0%}" if pd.notna(value) else "Onbekend")
+    frame["species_display"] = pd.to_numeric(
+        frame.get("species_count", pd.Series(index=frame.index, dtype=float)),
+        errors="coerce",
+    ).map(lambda value: str(int(value)) if pd.notna(value) else "Onbekend")
+
+    center_latitude = float(frame["latitude"].mean())
+    center_longitude = float(frame["longitude"].mean())
+    longitude_span = float(frame["longitude"].max() - frame["longitude"].min())
+    latitude_span = float(frame["latitude"].max() - frame["latitude"].min())
+    span = max(longitude_span, latitude_span)
+    zoom = 11 if span < 0.08 else 10 if span < 0.18 else 9 if span < 0.4 else 8
+
+    tile_layer = pdk.Layer(
+        "TileLayer",
+        data=SOIL_MAP_OSM_TILE_URL,
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        opacity=1.0,
+    )
+    point_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=frame,
+        get_position="[longitude, latitude]",
+        get_fill_color="map_color",
+        get_line_color=[35, 35, 35, 230],
+        line_width_min_pixels=1,
+        stroked=True,
+        filled=True,
+        get_radius=SOIL_MAP_POINT_RADIUS,
+        radius_min_pixels=6,
+        radius_max_pixels=16,
+        pickable=True,
+        auto_highlight=True,
+    )
+    tooltip = {
+        "html": (
+            "<b>Locatie:</b> {location_id}<br/>"
+            "<b>Karakteristiek:</b> {parameter_label}<br/>"
+            "<b>Interpretatie:</b> {interpretation}<br/>"
+            "<b>Indicatieve waarde:</b> {value_display}<br/>"
+            "<b>Bewijskracht:</b> {evidence_strength}<br/>"
+            "<b>Profieldekking:</b> {coverage_display}<br/>"
+            "<b>Indicatieve soorten:</b> {species_display}"
+        ),
+        "style": {
+            "backgroundColor": "white",
+            "color": "#1f2937",
+            "fontSize": "13px",
+            "border": "1px solid #9ca3af",
+        },
+    }
+    deck = pdk.Deck(
+        layers=[tile_layer, point_layer],
+        initial_view_state=pdk.ViewState(
+            latitude=center_latitude,
+            longitude=center_longitude,
+            zoom=zoom,
+            pitch=0,
+            bearing=0,
+        ),
+        tooltip=tooltip,
+        map_style=None,
+    )
+    st.pydeck_chart(deck, height=SOIL_MAP_HEIGHT, use_container_width=True)
+    _render_map_legend(frame)
+
+    total_locations = int(frame["location_id"].nunique())
+    sufficient_locations = int(
+        frame.loc[
+            ~frame["evidence_strength"].astype(str).isin(
+                ["Geen informatie", "Onvoldoende informatie"]
+            ),
+            "location_id",
+        ].nunique()
+    ) if "evidence_strength" in frame else total_locations
+    modal_interpretation = frame["interpretation"].mode()
+    main_interpretation = (
+        str(modal_interpretation.iloc[0]) if not modal_interpretation.empty else "Onbekend"
+    )
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Locaties op kaart", total_locations)
+    m2.metric("Voldoende informatie", sufficient_locations)
+    m3.metric("Meest voorkomende interpretatie", main_interpretation)
+    st.caption(
+        f"Ondergrond: {SOIL_MAP_OSM_ATTRIBUTION}. De punten tonen bio-indicaties "
+        "op meetlocaties en geen directe chemische water- of bodemmetingen. "
+        "Tussen meetlocaties is niet geïnterpoleerd."
+    )
+
+
+
 def render_waterbody_diagnosis(result: WaterbodyDiagnosisResult) -> None:
     year = f" ({result.filters.year})" if result.filters.year is not None else ""
     st.subheader(f"Interpretatie bodemtoestand: {result.waterbody}{year}")
@@ -217,6 +475,9 @@ def render_waterbody_diagnosis(result: WaterbodyDiagnosisResult) -> None:
     c2.metric("Mediane profieldekking", f"{result.metadata.get('median_profile_coverage', 0):.0%}")
     c3.metric("Beoordeelde kenmerken", result.metadata.get("parameter_count", 0))
     c4.metric("Sterke aanwijzingen", result.metadata.get("strong_parameter_count", 0))
+
+    st.subheader("Ruimtelijke interpretatie bodemtoestand")
+    render_waterbody_soil_map(result)
 
     st.subheader("Interpretatie per parameter")
     raw_frame = result.diagnoses_frame()
@@ -299,10 +560,155 @@ def render_waterbody_diagnosis(result: WaterbodyDiagnosisResult) -> None:
             st.dataframe(view.drop(columns=["parameter_key"], errors="ignore"), width="stretch", hide_index=True)
 
 
-def render_soil_diagnosis(result: SoilDiagnosisResult) -> None:
+
+def _selected_pydeck_objects(state: object) -> list[dict[str, object]]:
+    """Lees geselecteerde objecten robuust uit verschillende Streamlit-statevormen."""
+    selection = getattr(state, "selection", None)
+    if selection is None and isinstance(state, dict):
+        selection = state.get("selection")
+    objects = getattr(selection, "objects", None)
+    if objects is None and isinstance(selection, dict):
+        objects = selection.get("objects", {})
+    if not isinstance(objects, dict):
+        return []
+    selected: list[dict[str, object]] = []
+    for layer_objects in objects.values():
+        if isinstance(layer_objects, list):
+            selected.extend(
+                item for item in layer_objects if isinstance(item, dict)
+            )
+    return selected
+
+
+def _select_detail_location_from_map() -> None:
+    """Werk de bestaande meetlocatieselector bij vóór de pagina opnieuw rendert."""
+    state = st.session_state.get("soil_detail_location_map")
+    selected = _selected_pydeck_objects(state)
+    if selected and selected[0].get("location_id") is not None:
+        st.session_state["soil_location"] = str(selected[0]["location_id"])
+
+
+def render_location_navigation_map(
+    result: SoilDiagnosisResult,
+    waterbody_result: WaterbodyDiagnosisResult | None,
+) -> None:
+    """Toon onder Detail meetlocatie een aanklikbare OSM-kaart van alle locaties."""
+    if waterbody_result is None:
+        st.info("Geen waterlichaamkaart beschikbaar voor locatienavigatie.")
+        return
+    source = getattr(waterbody_result, "map_locations", pd.DataFrame()).copy()
+    if source.empty or "location_id" not in source.columns:
+        st.info("Voor dit waterlichaam zijn geen kaartlocaties beschikbaar.")
+        return
+
+    coordinate_columns = [
+        column for column in ("latitude", "longitude", "rd_x", "rd_y")
+        if column in source.columns
+    ]
+    frame = source[["location_id", *coordinate_columns]].copy()
+    frame = frame.drop_duplicates(subset=["location_id"]).reset_index(drop=True)
+    frame = _normalise_map_coordinates(frame)
+    if frame.empty:
+        st.warning("Voor de meetlocaties zijn geen bruikbare kaartcoördinaten gevonden.")
+        return
+
+    try:
+        import pydeck as pdk
+    except ImportError:
+        st.warning("Installeer pydeck en pyproj om de locatienavigatiekaart te tonen.")
+        return
+
+    current_location = str(result.location_id)
+    frame["is_selected"] = frame["location_id"].astype(str).eq(current_location)
+    frame["fill_color"] = frame["is_selected"].map(
+        {True: [220, 38, 38, 245], False: [37, 99, 235, 210]}
+    )
+    frame["line_color"] = frame["is_selected"].map(
+        {True: [127, 29, 29, 255], False: [30, 64, 175, 235]}
+    )
+    frame["point_radius"] = frame["is_selected"].map(
+        {True: SOIL_MAP_POINT_RADIUS * 1.5, False: SOIL_MAP_POINT_RADIUS}
+    )
+    frame["selected_label"] = frame["is_selected"].map(
+        {True: "Huidige meetlocatie", False: "Klik om dit detail te openen"}
+    )
+
+    longitude_span = float(frame["longitude"].max() - frame["longitude"].min())
+    latitude_span = float(frame["latitude"].max() - frame["latitude"].min())
+    span = max(longitude_span, latitude_span)
+    zoom = 11 if span < 0.08 else 10 if span < 0.18 else 9 if span < 0.4 else 8
+
+    tile_layer = pdk.Layer(
+        "TileLayer",
+        id="soil-detail-osm",
+        data=SOIL_MAP_OSM_TILE_URL,
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        opacity=1.0,
+    )
+    location_layer = pdk.Layer(
+        "ScatterplotLayer",
+        id="soil-detail-locations",
+        data=frame,
+        get_position="[longitude, latitude]",
+        get_fill_color="fill_color",
+        get_line_color="line_color",
+        get_radius="point_radius",
+        radius_min_pixels=7,
+        radius_max_pixels=18,
+        line_width_min_pixels=2,
+        stroked=True,
+        filled=True,
+        pickable=True,
+        auto_highlight=True,
+    )
+    tooltip = {
+        "html": (
+            "<b>Meetlocatie:</b> {location_id}<br/>"
+            "{selected_label}"
+        ),
+        "style": {
+            "backgroundColor": "white",
+            "color": "#1f2937",
+            "fontSize": "13px",
+            "border": "1px solid #9ca3af",
+        },
+    }
+    deck = pdk.Deck(
+        layers=[tile_layer, location_layer],
+        initial_view_state=pdk.ViewState(
+            latitude=float(frame["latitude"].mean()),
+            longitude=float(frame["longitude"].mean()),
+            zoom=zoom,
+            pitch=0,
+            bearing=0,
+        ),
+        tooltip=tooltip,
+        map_style=None,
+    )
+    st.pydeck_chart(
+        deck,
+        height=SOIL_MAP_HEIGHT,
+        width="stretch",
+        selection_mode="single-object",
+        on_select=_select_detail_location_from_map,
+        key="soil_detail_location_map",
+    )
+    st.caption(
+        "Klik op een blauwe meetlocatie om het detail van die locatie te openen. "
+        "De huidige meetlocatie is rood gemarkeerd."
+    )
+
+def render_soil_diagnosis(
+    result: SoilDiagnosisResult,
+    waterbody_result: WaterbodyDiagnosisResult | None = None,
+) -> None:
     year = f" ({result.filters.year})" if result.filters.year is not None else ""
     st.subheader(f"Locatie interpretatie: {result.location_id}{year}")
     st.info(result.summary)
+    st.subheader("Meetlocaties op de kaart")
+    render_location_navigation_map(result, waterbody_result)
     frame = _interpret_diagnosis_table(
         result.diagnoses_frame(),
         "Waarde",
@@ -564,11 +970,289 @@ def render_trend_interpretation(result) -> None:
         )
 
 
+_TREND_ARROW_SYMBOLS = {
+    "Overtuigend stijgend": "↑",
+    "Mogelijk stijgend": "↗",
+    "Stabiel": "→",
+    "Mogelijk dalend": "↘",
+    "Overtuigend dalend": "↓",
+    "Onvoldoende gegevens": "·",
+}
+
+
+def _trend_arrow_symbol(classification: object) -> str:
+    text = str(classification).strip()
+    if text in _TREND_ARROW_SYMBOLS:
+        return _TREND_ARROW_SYMBOLS[text]
+    lowered = text.lower()
+    if "stijgend" in lowered:
+        return "↑" if "overtuigend" in lowered else "↗"
+    if "dalend" in lowered:
+        return "↓" if "overtuigend" in lowered else "↘"
+    if "stabiel" in lowered or "geen trend" in lowered:
+        return "→"
+    return "·"
+
+
+def _render_trend_arrow_legend(frame: pd.DataFrame) -> None:
+    present = set(frame["classification"].dropna().astype(str))
+    items = []
+    for label, symbol in _TREND_ARROW_SYMBOLS.items():
+        if label in present:
+            items.append(
+                '<span style="display:inline-flex;align-items:center;margin:0 18px 8px 0;">'
+                f'<b style="font-size:25px;width:25px;text-align:center;margin-right:5px;">{symbol}</b>'
+                f'{label}</span>'
+            )
+    if items:
+        st.markdown("**Legenda lokale trendrichting**<br>" + "".join(items), unsafe_allow_html=True)
+
+
+@st.cache_resource(show_spinner=False)
+def _trend_icon_definitions() -> dict[str, dict[str, object]] | None:
+    """Maak per trendklasse een IconLayer-object van het bijbehorende PNG-bestand."""
+    from PIL import Image
+
+    asset_directory = Path(__file__).resolve().parents[1] / "assets" / "map"
+    filenames = {
+        "up": "trend_up.png",
+        "stable": "trend_stable.png",
+        "down": "trend_down.png",
+        "unknown": "trend_unknown.png",
+    }
+    missing = [
+        filename
+        for filename in filenames.values()
+        if not (asset_directory / filename).is_file()
+    ]
+    if missing:
+        return None
+
+    definitions: dict[str, dict[str, object]] = {}
+    for key, filename in filenames.items():
+        with Image.open(asset_directory / filename) as source:
+            icon = source.convert("RGBA")
+            alpha_bbox = icon.getchannel("A").getbbox()
+            if alpha_bbox is not None:
+                icon = icon.crop(alpha_bbox)
+            icon.thumbnail(
+                (SOIL_TREND_ICON_CONTENT_SIZE, SOIL_TREND_ICON_CONTENT_SIZE),
+                Image.Resampling.LANCZOS,
+            )
+
+            buffer = io.BytesIO()
+            icon.save(buffer, format="PNG", optimize=True)
+
+        definitions[key] = {
+            "url": "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "width": icon.width,
+            "height": icon.height,
+            "anchorX": icon.width // 2,
+            "anchorY": icon.height // 2,
+        }
+
+    return definitions
+
+
+def _trend_icon_name(classification: object) -> str:
+    text = str(classification).lower()
+    if "stijgend" in text:
+        return "up"
+    if "dalend" in text:
+        return "down"
+    if "stabiel" in text or "geen trend" in text:
+        return "stable"
+    return "unknown"
+
+
+def render_waterbody_trend_map(result) -> None:
+    """Toon lokale trends met iconen uit assets/map op een OSM-ondergrond."""
+    maps = dict(getattr(result, "trend_maps", {}) or {})
+    fallback = getattr(result, "trend_map", None)
+    if not maps and fallback is not None:
+        maps = {str(result.parameter_key): fallback}
+    if not maps:
+        st.info("Voor dit resultaat is nog geen lokale trendkaart beschikbaar. Bereken de trend opnieuw.")
+        return
+
+    labels = {key: str(getattr(value, "parameter_label", key)) for key, value in maps.items()}
+    label_to_key = {label: key for key, label in labels.items()}
+    options = sorted(label_to_key)
+    default = labels.get(str(result.parameter_key), options[0])
+    selected = st.selectbox(
+        "Parameter op de trendkaart",
+        options,
+        index=options.index(default) if default in options else 0,
+        key="soil_trend_map_parameter",
+        help="Wisselen gebruikt vooraf berekende kaartresultaten en start geen nieuwe bootstrap.",
+    )
+
+    trend_map = maps[label_to_key[selected]]
+    frame = getattr(trend_map, "locations", pd.DataFrame()).copy()
+    if frame.empty:
+        st.info("Voor deze parameter zijn onvoldoende locatie-jaarresultaten.")
+        return
+
+    try:
+        import pydeck as pdk
+    except ImportError:
+        st.warning("Installeer pydeck en pyproj om de trendkaart weer te geven.")
+        return
+
+    icon_definitions = _trend_icon_definitions()
+    if icon_definitions is None:
+        st.warning(
+            "De trendkaart mist een of meer bestanden in waterplanten_app/assets/map: "
+            "trend_up.png, trend_down.png, trend_stable.png of trend_unknown.png."
+        )
+        return
+    frame = _normalise_map_coordinates(frame)
+    if frame.empty:
+        st.warning("Voor de trendresultaten zijn geen bruikbare coördinaten gevonden.")
+        return
+
+    for column, default_value in {
+        "classification": "Onvoldoende gegevens",
+        "location_id": "Onbekend",
+        "parameter_label": selected,
+        "latest_interpretation": "Onbekend",
+    }.items():
+        if column not in frame:
+            frame[column] = default_value
+        frame[column] = frame[column].fillna(default_value).astype(str)
+
+    frame["icon_name"] = frame["classification"].map(_trend_icon_name)
+    frame["icon_data"] = frame["icon_name"].map(
+        lambda key: icon_definitions.get(str(key), icon_definitions["unknown"])
+    )
+    supported = frame.get(
+        "statistically_supported", pd.Series(False, index=frame.index)
+    ).fillna(False).astype(bool)
+    # Houd de accessor op 1. De uiteindelijke grootte wordt uitsluitend door
+    # size_scale en de harde pixelgrenzen van de IconLayer bepaald.
+    frame["icon_size"] = 1.0
+
+    frame["tau_display"] = pd.to_numeric(
+        frame.get("tau", pd.Series(index=frame.index, dtype=float)), errors="coerce"
+    ).map(
+        lambda value: f"{value:.3f}" if pd.notna(value) else "Niet berekend"
+    )
+    frame["p_display"] = pd.to_numeric(
+        frame.get("p_value", pd.Series(index=frame.index, dtype=float)), errors="coerce"
+    ).map(
+        lambda value: f"{value:.3g}" if pd.notna(value) else "Niet berekend"
+    )
+    frame["slope_display"] = pd.to_numeric(
+        frame.get(
+            "sen_slope_per_year", pd.Series(index=frame.index, dtype=float)
+        ),
+        errors="coerce",
+    ).map(lambda value: f"{value:+.4g} per jaar" if pd.notna(value) else "Niet berekend")
+    frame["supported_display"] = supported.map({True: "Ja", False: "Nee"})
+    frame["years_display"] = pd.to_numeric(
+        frame.get("year_count", pd.Series(index=frame.index, dtype=float)),
+        errors="coerce",
+    ).map(
+        lambda value: str(int(value)) if pd.notna(value) else "Onbekend"
+    )
+
+    span = max(
+        float(frame["longitude"].max() - frame["longitude"].min()),
+        float(frame["latitude"].max() - frame["latitude"].min()),
+    )
+    zoom = 11 if span < 0.08 else 10 if span < 0.18 else 9 if span < 0.4 else 8
+    tile_layer = pdk.Layer(
+        "TileLayer",
+        data=SOIL_MAP_OSM_TILE_URL,
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+    )
+    icon_layer = pdk.Layer(
+        "IconLayer",
+        data=frame,
+        get_position="[longitude, latitude]",
+        get_icon="icon_data",
+        get_size="icon_size",
+        size_scale=SOIL_TREND_ICON_PLOT_SIZE,
+        size_units="pixels",
+        size_min_pixels=SOIL_TREND_ICON_MIN_PIXELS,
+        size_max_pixels=SOIL_TREND_ICON_MAX_PIXELS,
+        billboard=True,
+        pickable=True,
+        auto_highlight=True,
+    )
+    tooltip = {
+        "html": (
+            "<b>Locatie:</b> {location_id}<br/>"
+            "<b>Parameter:</b> {parameter_label}<br/>"
+            "<b>Trendklasse:</b> {classification}<br/>"
+            "<b>Kendall's Tau:</b> {tau_display}<br/>"
+            "<b>p-waarde:</b> {p_display}<br/>"
+            "<b>Statistisch ondersteund:</b> {supported_display}<br/>"
+            "<b>Sen-helling:</b> {slope_display}<br/>"
+            "<b>Meetjaren:</b> {years_display}<br/>"
+            "<b>Laatste interpretatie:</b> {latest_interpretation}"
+        )
+    }
+    deck = pdk.Deck(
+        layers=[tile_layer, icon_layer],
+        initial_view_state=pdk.ViewState(
+            latitude=float(frame["latitude"].mean()),
+            longitude=float(frame["longitude"].mean()),
+            zoom=zoom,
+        ),
+        tooltip=tooltip,
+        map_style=None,
+    )
+    st.pydeck_chart(deck, height=SOIL_MAP_HEIGHT, use_container_width=True)
+
+    class_labels = (
+        ("Sterk stijgend", "up"),
+        ("Stijgend", "up"),
+        ("Weinig consistente richting", "stable"),
+        ("Dalend", "down"),
+        ("Sterk dalend", "down"),
+        ("Onvoldoende gegevens", "unknown"),
+    )
+    present = set(frame["classification"].astype(str))
+    file_by_key = {
+        "up": "trend_up.png",
+        "down": "trend_down.png",
+        "stable": "trend_stable.png",
+        "unknown": "trend_unknown.png",
+    }
+    legend_items = [
+        f"{file_by_key[key]}: {label}"
+        for label, key in class_labels
+        if label in present
+    ]
+    if legend_items:
+        st.caption("Legenda: " + " | ".join(legend_items))
+
+    metadata = dict(getattr(trend_map, "metadata", {}))
+    dominant = frame["classification"].mode()
+    dominant_class = str(dominant.iloc[0]) if not dominant.empty else "Onbekend"
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Locaties met trendraming", int(metadata.get("tested_location_count", frame["location_id"].nunique())))
+    c2.metric("Statistisch ondersteund", int(metadata.get("statistically_supported_count", 0)))
+    c3.metric("Onvoldoende meetjaren", int(metadata.get("insufficient_location_count", 0)))
+    c4.metric("Meest voorkomende trendklasse", dominant_class)
+    st.caption(
+        f"Ondergrond: {SOIL_MAP_OSM_ATTRIBUTION}. De pictogramrichting toont de lokale "
+        "trend; grotere pictogrammen wijzen op een sterkere en/of statistisch "
+        "ondersteunde trend. Tussen locaties is niet geïnterpoleerd."
+    )
+
+
 def render_waterbody_trends(result) -> None:
     """Render jaarlijkse medianen, ruimtelijke bandbreedte en locatiedekking."""
     st.subheader(f"Trend: {result.parameter_label} in {result.waterbody}")
     st.info(result.summary)
     render_parameter_explainer(result)
+    st.subheader("Lokale trends op de kaart")
+    render_waterbody_trend_map(result)
     render_trend_interpretation(result)
     render_formal_trend_assessment(result)
     render_trend_sensitivity(result)

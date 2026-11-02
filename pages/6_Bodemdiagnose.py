@@ -1,5 +1,7 @@
 from __future__ import annotations
 import streamlit as st
+import pydeck as pdk
+from pyproj import Transformer
 from utils import load_data
 from waterplanten_app.config.soil_diagnosis_config import SOIL_DIAGNOSIS_SESSION_PREFIX
 from waterplanten_app.domain.contracts import DashboardFilters
@@ -31,7 +33,11 @@ try:
         location=render_location_selector(locations)
         if location is None: st.stop()
         result=_remember(_result_key("location",filter_key,location,weighting),lambda:get_soil_diagnosis(filters,location,weighting))
-        render_soil_diagnosis(result)
+        waterbody_result=_remember(
+            _result_key("waterbody",filter_key,weighting),
+            lambda:get_waterbody_diagnosis(filters,weighting),
+        )
+        render_soil_diagnosis(result,waterbody_result)
     elif analysis==ANALYSIS_TRENDS:
         st.caption("Kies de instellingen en klik op ‘Bereken trend’. Formele bootstrapanalyse is optioneel.")
         parameter,mode,min_years,formal,bootstrap,submitted=render_trend_controls(get_available_trend_parameters())

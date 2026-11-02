@@ -105,6 +105,8 @@ class WaterbodyDiagnosisResult:
     parameter_diagnoses: tuple[WaterbodyParameterDiagnosis, ...] = field(default_factory=tuple)
     location_diagnoses: pd.DataFrame = field(default_factory=pd.DataFrame)
     location_overview: pd.DataFrame = field(default_factory=pd.DataFrame)
+    map_locations: pd.DataFrame = field(default_factory=pd.DataFrame)
+    map_metadata: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def diagnoses_frame(self) -> pd.DataFrame:
@@ -151,6 +153,35 @@ class TrendInterpretation:
     ecological_meaning: str
     limitations: tuple[str, ...] = ()
 
+
+@dataclass(frozen=True)
+class LocationMannKendallTrend:
+    """Lokale trendstatistiek voor een parameter op een meetlocatie."""
+    location_id: str
+    parameter_key: str
+    parameter_label: str
+    tau: float | None
+    p_value: float | None
+    sen_slope_per_year: float | None
+    classification: str
+    statistically_supported: bool
+    year_count: int
+    first_year: int | None
+    last_year: int | None
+    missing_year_count: int
+    latest_interpretation: str
+
+
+@dataclass
+class WaterbodyTrendMapResult:
+    """UI-neutrale kaartgegevens voor lokale Mann-Kendall-trends."""
+    waterbody: str
+    parameter_key: str
+    parameter_label: str
+    minimum_years: int
+    locations: pd.DataFrame = field(default_factory=pd.DataFrame)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
 @dataclass
 class SoilDiagnosisTrendResult:
     """Jaarlijkse waterlichaamdiagnoses voor een geselecteerde parameter."""
@@ -168,5 +199,7 @@ class SoilDiagnosisTrendResult:
     quality: TrendQualityAssessment | None = None
     sensitivity: TrendScenarioComparison | None = None
     interpretation: TrendInterpretation | None = None
+    trend_map: WaterbodyTrendMapResult | None = None
+    trend_maps: Mapping[str, WaterbodyTrendMapResult] = field(default_factory=dict)
     summary: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
