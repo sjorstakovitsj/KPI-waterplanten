@@ -23,7 +23,7 @@ st.warning("De resultaten zijn ecologische aanwijzingen en geen vervanging voor 
 data=load_data()
 if data.empty: st.error("Geen vegetatiegegevens geladen."); st.stop()
 st.sidebar.header("Filters")
-projects=select_projects(data,default=("KRW","N2000")); waterbodies=select_waterbodies(data,projects,default=("Gooimeer",)); year=select_year(data,"Selecteer meetjaar",default=2024)
+projects=select_projects(data,default=("KRW","N2000")); waterbodies=select_waterbodies(data,projects,default=("Veluwemeer",)); year=select_year(data,"Selecteer meetjaar",default=2025)
 filters=DashboardFilters(year=year,projects=projects,waterbodies=waterbodies)
 if len(waterbodies)!=1: st.info("Selecteer precies één waterlichaam."); st.stop()
 analysis=render_analysis_level_selector(); weighting=render_weighting_selector(); filter_key=_filters_key(filters)

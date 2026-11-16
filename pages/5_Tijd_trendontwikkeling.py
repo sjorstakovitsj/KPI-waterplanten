@@ -117,8 +117,17 @@ swipe_years = (
 )
 if len(swipe_years) >= 2:
     c1, c2 = st.columns(2)
-    default_left_index = swipe_years.index(2021) if 2021 in swipe_years else max(0, len(swipe_years) - 2)
-    default_right_index = swipe_years.index(2024) if 2024 in swipe_years else len(swipe_years) - 1
+    # Standaardvergelijking: het meest recente meetjaar (n) rechts en
+    # drie jaar daarvoor (n-3) links. Als n-3 niet beschikbaar is, wordt
+    # het vorige beschikbare meetjaar gebruikt.
+    latest_year = swipe_years[-1]
+    comparison_year = latest_year - 3
+    default_right_index = len(swipe_years) - 1
+    default_left_index = (
+        swipe_years.index(comparison_year)
+        if comparison_year in swipe_years
+        else len(swipe_years) - 2
+    )
     y1 = c1.selectbox('Jaar links', swipe_years, index=default_left_index)
     y2 = c2.selectbox('Jaar rechts', swipe_years, index=default_right_index)
     if y1 == y2:

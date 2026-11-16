@@ -210,11 +210,14 @@ st.sidebar.header('Algemene filters')
 if df.empty:
     st.error('Geen data geladen. Controleer utils.py en het bronbestand.')
     st.stop()
-filters = DashboardFilters(year=select_year(df, 'Selecteer meetjaar', default=2024), projects=select_projects(df))
+filters = DashboardFilters(year=select_year(df, 'Selecteer meetjaar', default=2025), projects=select_projects(df))
 result = build_overview_result(filters)
 
 st.subheader('🥧 Samenstelling waarnemingen (individuele soorten)')
-c1, c2, c3, c4 = st.columns(4)
+# De drie compacte taartdiagrammen blijven naast elkaar staan.
+# Het N2000-diagram krijgt een aparte, bredere rij, omdat de lange
+# soortnamen in de legenda anders over het diagram heen kunnen vallen.
+c1, c2, c3 = st.columns(3)
 with c1:
     d = result.krw_pie.rename(columns={'categorie': 'KRW-klasse', 'aantal': 'Aantal waarnemingen'})
     render_pie(d, 'KRW-klasse', 'Aantal waarnemingen', 'Verdeling waarnemingen per KRW-score', colors=KRW, caption=f"Aantal zonder KRW-match: {int(d.loc[d['KRW-klasse'] == NO_MATCH, 'Aantal waarnemingen'].sum())}" if not d.empty else None)
@@ -224,7 +227,11 @@ with c2:
 with c3:
     d = result.species_group_pie.rename(columns={'categorie': 'Soortgroep', 'aantal': 'Aantal waarnemingen'})
     render_pie(d, 'Soortgroep', 'Aantal waarnemingen', 'Verdeling waarnemingen per soortgroep', colors=SOORTGROEP, caption=f"Aantal zonder soortgroep-match: {int(d.loc[d['Soortgroep'] == NO_MATCH, 'Aantal waarnemingen'].sum())}" if not d.empty else None)
-with c4:
+
+# Gebruik 75% van de paginabreedte voor het N2000-diagram. Daardoor is er
+# voldoende horizontale ruimte om de legenda rechts naast het diagram te tonen.
+n2000_col, n2000_spacer = st.columns([3, 1])
+with n2000_col:
     d = result.n2000_pie.rename(columns={'categorie': 'Kenmerkende soort (N2000)', 'label_kort': 'Label kort', 'aantal': 'Aantal waarnemingen'})
     render_pie(d, 'Kenmerkende soort (N2000)', 'Aantal waarnemingen', 'Verdeling waarnemingen van Kenmerkende soorten (N2000)', short_label_col='Label kort', caption=f"Aantal Kenmerkende soorten (N2000)-waarnemingen: {int(d['Aantal waarnemingen'].sum())}" if not d.empty else None)
 render_overview_kpis(result.kpis); st.divider()
