@@ -1,17 +1,5 @@
 from __future__ import annotations
 
-"""Definitieve data-accesslaag.
-
-Deze module hangt uitsluitend af van:
-- settings.py
-- mappings.py
-- duckdb_runtime.py
-- taxonomy.py
-
-Er zijn bewust geen imports uit pipelines of services, zodat er geen teruglussen
-bij circular imports ontstaan.
-"""
-
 import re
 from pathlib import Path
 from typing import Tuple

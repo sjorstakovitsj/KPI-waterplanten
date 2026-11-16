@@ -1,0 +1,21 @@
+{
+  "pipeline_version": "2026-09-29_soil_species_profiles_v1",
+  "source": "C:\\Users\\benya\\Documents\\Python projects\\aquaflora\\soort_randvoorwaarden.csv",
+  "source_fingerprint": [
+    "C:/Users/benya/Documents/Python projects/aquaflora/soort_randvoorwaarden.csv",
+    1790665798341504100,
+    11497
+  ],
+  "parquet_fingerprint": [
+    "C:/Users/benya/Documents/Python projects/aquaflora/.cache_waterplanten/soil_species_profiles.parquet",
+    1794834585690108000,
+    21735
+  ],
+  "row_count": 80,
+  "profile_count": 80,
+  "warning_count": 2,
+  "warnings": [
+    "2 soort(en) hebben een onvolledig pH-profiel; alleen complete, bruikbare velden tellen per berekening mee.",
+    "2 soort(en) hebben een onvolledig alk-profiel; alleen complete, bruikbare velden tellen per berekening mee."
+  ]
+}

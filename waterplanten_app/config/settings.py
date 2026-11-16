@@ -5,7 +5,7 @@ from pathlib import Path
 # ============================================================================
 # BRONBESTANDEN / PADEN
 # ============================================================================
-FILE_PATH = 'AquaDeskMeasurementExport_RWS_20260222163559.csv'
+FILE_PATH = 'Ruwe data waterplanten 16-11-2026.csv'
 SPECIES_LOOKUP_PATH = 'Koppeltabel_score_namen.csv'
 BASE_DIR = Path(__file__).resolve().parents[2]
 CACHE_DIR = BASE_DIR / '.cache_waterplanten'
