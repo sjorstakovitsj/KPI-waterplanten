@@ -5,24 +5,31 @@ from pathlib import Path
 # ============================================================================
 # BRONBESTANDEN / PADEN
 # ============================================================================
-FILE_PATH = 'Ruwe data waterplanten 16-11-2026.csv'
-SPECIES_LOOKUP_PATH = 'Koppeltabel_score_namen.csv'
 BASE_DIR = Path(__file__).resolve().parents[2]
-CACHE_DIR = BASE_DIR / '.cache_waterplanten'
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-MEAS_PARQUET = CACHE_DIR / 'measurements.parquet'
-FINAL_PARQUET = CACHE_DIR / 'final_df.parquet'
-LOOKUP_PARQUET = CACHE_DIR / 'species_lookup.parquet'
-COORD_CACHE_PARQUET = CACHE_DIR / 'coord_cache.parquet'
+FILE_PATH = BASE_DIR / 'Ruwe data waterplanten 16-11-2026.csv'
+SPECIES_LOOKUP_PATH = BASE_DIR / 'Koppeltabel_score_namen.csv'
+
+# Vooraf gebouwde Parquets die met de repository worden gedeployed.
+PARQUET_DIR = BASE_DIR / 'data' / 'parquets'
+PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
+# True: de applicatie leest uitsluitend vooraf gebouwde Parquets.
+# False: ontbrekende/verouderde Parquets mogen tijdens runtime worden opgebouwd.
+PRELOADED_PARQUETS = True
+
+MEAS_PARQUET = PARQUET_DIR / 'measurements.parquet'
+FINAL_PARQUET = PARQUET_DIR / 'final_df.parquet'
+LOOKUP_PARQUET = PARQUET_DIR / 'species_lookup.parquet'
+COORD_CACHE_PARQUET = PARQUET_DIR / 'coord_cache.parquet'
 PIPELINE_VERSION = '2026-03-27_duckdb_parquet_coords_v4_n2000_as_entity'
 
 # ============================================================================
 # BODEMDIAGNOSE / SOORTSPECIFIEKE STANDPLAATSPROFIELEN
 # ============================================================================
 SOIL_PROFILES_SOURCE = BASE_DIR / 'soort_randvoorwaarden.csv'
-SOIL_PROFILES_PARQUET = CACHE_DIR / 'soil_species_profiles.parquet'
-SOIL_PROFILES_METADATA = CACHE_DIR / 'soil_species_profiles.meta.json'
+SOIL_PROFILES_PARQUET = PARQUET_DIR / 'soil_species_profiles.parquet'
+SOIL_PROFILES_METADATA = PARQUET_DIR / 'soil_species_profiles.meta.json'
 SOIL_PROFILES_PIPELINE_VERSION = '2026-09-29_soil_species_profiles_v1'
 
 
@@ -63,6 +70,9 @@ DD_API_DEFAULT_SELECT = None
 DD_API_DEFAULT_EXPAND = None
 
 # Lokale cache voor ruwe API-downloads (voordat de bestaande verrijkingspipeline draait)
+# API-tussenbestanden blijven lokale runtimecache en gaan niet mee als preloadbestand.
+CACHE_DIR = BASE_DIR / '.cache_waterplanten'
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DD_API_MEAS_PARQUET = CACHE_DIR / 'dd_eco_measurements_raw.parquet'
 DD_API_REFERENCES_PARQUET = CACHE_DIR / 'dd_eco_references.parquet'
 DD_API_PIPELINE_VERSION = '2026-04-04_dd_eco_v3_raw_contract_v1'
@@ -77,8 +87,8 @@ WMS_ATTRIBUTION = 'Rijkswaterstaat bathymetrie IJsselmeergebied'
 # ============================================================================
 # CHEMIE
 # ============================================================================
-CHEMISTRY_FILE_PATH = 'FC Waterplanten IJG.csv'
-CHEMISTRY_PARQUET = CACHE_DIR / 'chemistry_timeseries.parquet'
+CHEMISTRY_FILE_PATH = BASE_DIR / 'FC Waterplanten IJG.csv'
+CHEMISTRY_PARQUET = PARQUET_DIR / 'chemistry_timeseries.parquet'
 CHEMISTRY_PIPELINE_VERSION = '2026-03-30_fc_waterplanten_ijg_eventwaarde_text_hotfix_v2'
 
 # ============================================================================

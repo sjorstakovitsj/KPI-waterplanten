@@ -3,13 +3,13 @@
   "source": "C:\\Users\\benya\\Documents\\Python projects\\aquaflora\\soort_randvoorwaarden.csv",
   "source_fingerprint": [
     "C:/Users/benya/Documents/Python projects/aquaflora/soort_randvoorwaarden.csv",
-    1790665798341504100,
+    1794905094072190800,
     11497
   ],
   "parquet_fingerprint": [
-    "C:/Users/benya/Documents/Python projects/aquaflora/.cache_waterplanten/soil_species_profiles.parquet",
-    1794834585690108000,
-    21735
+    "C:/Users/benya/Documents/Python projects/aquaflora/data/parquets/soil_species_profiles.parquet",
+    1794910282769109400,
+    21756
   ],
   "row_count": 80,
   "profile_count": 80,

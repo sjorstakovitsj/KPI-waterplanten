@@ -37,6 +37,8 @@ from waterplanten_app.core.duckdb_runtime import (
     _get_duckdb,
     _mtime_or_zero,
     _read_parquet_to_pandas,
+    preloaded_parquets_enabled,
+    require_preloaded_parquet,
     _write_parquet_from_pandas,
 )
 from waterplanten_app.core.taxonomy import add_species_group_columns
@@ -192,6 +194,9 @@ def _load_coord_cache() -> pd.DataFrame:
 
 
 def _save_coord_cache(df: pd.DataFrame) -> None:
+    # De online app is in preloadmodus alleen-lezen.
+    if preloaded_parquets_enabled():
+        return
     if df.empty:
         return
     df = df.drop_duplicates(subset=['epsg', 'wkt'], keep='last')
@@ -262,6 +267,14 @@ def determine_waterbody(meetobject_code: str) -> str:
 def load_species_lookup() -> pd.DataFrame:
     """Laad koppeltabel met NL naam, trofie (Watertype) en KRW-scores (M14/M21)."""
     csv_path = Path(SPECIES_LOOKUP_PATH)
+    if preloaded_parquets_enabled():
+        require_preloaded_parquet(LOOKUP_PARQUET, 'species_lookup.parquet')
+        df_cached = _read_parquet_to_pandas(LOOKUP_PARQUET)
+        want = ['soort_norm', 'NL naam', 'Watertype', 'M14', 'M21']
+        for c in want:
+            if c not in df_cached.columns:
+                df_cached[c] = np.nan
+        return df_cached[want]
     if LOOKUP_PARQUET.exists() and _mtime_or_zero(LOOKUP_PARQUET) >= _mtime_or_zero(csv_path):
         df_cached = _read_parquet_to_pandas(LOOKUP_PARQUET)
         want = ['soort_norm', 'NL naam', 'Watertype', 'M14', 'M21']
@@ -402,6 +415,10 @@ def _file_signature() -> Tuple[str, float, float, str]:
 
 @st.cache_data
 def _load_data_cached(sig: Tuple[str, float, float, str]) -> pd.DataFrame:
+    if preloaded_parquets_enabled():
+        require_preloaded_parquet(FINAL_PARQUET, 'final_df.parquet')
+        return _ensure_match_display_columns(_read_parquet_to_pandas(FINAL_PARQUET))
+
     csv_path = Path(FILE_PATH)
     lookup_csv = Path(SPECIES_LOOKUP_PATH)
 
@@ -929,6 +946,9 @@ def load_ecology_timeseries_data() -> pd.DataFrame:
 def load_chemistry_data() -> pd.DataFrame:
     """Laad chemiedata uit cache/parquet of CSV-bronbestand."""
     csv_path = Path(CHEMISTRY_FILE_PATH)
+    if preloaded_parquets_enabled():
+        require_preloaded_parquet(CHEMISTRY_PARQUET, 'chemistry_timeseries.parquet')
+        return _read_parquet_to_pandas(CHEMISTRY_PARQUET)
     if CHEMISTRY_PARQUET.exists() and _mtime_or_zero(CHEMISTRY_PARQUET) >= _mtime_or_zero(csv_path):
         try:
             return _read_parquet_to_pandas(CHEMISTRY_PARQUET)
