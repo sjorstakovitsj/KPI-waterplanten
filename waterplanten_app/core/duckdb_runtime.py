@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
+from waterplanten_app.config import settings as app_settings
 from waterplanten_app.config.settings import (
     DATA_SOURCE,
     DATA_SOURCE_FALLBACK,
@@ -31,7 +33,7 @@ except Exception:
 
 @st.cache_resource
 def _get_duckdb() -> Optional['duckdb.DuckDBPyConnection']:
-    """Eén DuckDB connectie per Streamlit sessie."""
+    """Eén DuckDB-connectie per Streamlit-proces."""
     if duckdb is None:
         return None
     con = duckdb.connect(database=':memory:')
@@ -42,12 +44,38 @@ def _get_duckdb() -> Optional['duckdb.DuckDBPyConnection']:
     return con
 
 
+def preloaded_parquets_enabled() -> bool:
+    """Geef aan of de applicatie uitsluitend vooraf gebouwde Parquets mag lezen.
+
+    Voorkeursinstelling: PRELOADED_PARQUETS in config/settings.py. Voor deployment
+    kan dezelfde instelling ook als omgevingsvariabele worden gezet.
+    """
+    value = os.getenv(
+        'PRELOADED_PARQUETS',
+        str(getattr(app_settings, 'PRELOADED_PARQUETS', False)),
+    )
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def require_preloaded_parquet(path: Path, name: str | None = None) -> Path:
+    """Controleer dat een verplicht preloadbestand bestaat en niet leeg is."""
+    path = Path(path)
+    label = name or path.name
+    if not path.exists():
+        raise FileNotFoundError(
+            f'Preloadmodus is actief, maar {label} ontbreekt: {path.resolve()}. '
+            'Bouw en commit de Parquets voordat de Streamlit-app wordt gestart.'
+        )
+    if path.stat().st_size <= 0:
+        raise RuntimeError(f'Preloadbestand is leeg: {path.resolve()}')
+    return path
+
+
 def _mtime_or_zero(path: Path) -> float:
     try:
-        return path.stat().st_mtime
+        return Path(path).stat().st_mtime
     except Exception:
         return 0.0
-
 
 
 def _path_fingerprint(path: Path) -> tuple[str, int, int]:
@@ -61,21 +89,28 @@ def _path_fingerprint(path: Path) -> tuple[str, int, int]:
 
 
 def _paths_fingerprint(*paths: Path) -> tuple[tuple[str, int, int], ...]:
-    """Combineer meerdere bestandsfingerprints tot een hashbare sleutel."""
     return tuple(_path_fingerprint(Path(path)) for path in paths)
 
 
 def _write_parquet_from_pandas(df: pd.DataFrame, path: Path) -> None:
-    """Schrijf Parquet met pyarrow indien beschikbaar, anders pandas."""
+    """Schrijf Parquet atomair, zodat een mislukte build het oude bestand niet beschadigt."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if pq is not None and pa is not None:
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        pq.write_table(table, path.as_posix(), compression='zstd')
-    else:
-        df.to_parquet(path.as_posix(), index=False)
+    tmp_path = path.with_name(f'.{path.name}.tmp')
+    tmp_path.unlink(missing_ok=True)
+    try:
+        if pq is not None and pa is not None:
+            table = pa.Table.from_pandas(df, preserve_index=False)
+            pq.write_table(table, tmp_path.as_posix(), compression='zstd')
+        else:
+            df.to_parquet(tmp_path.as_posix(), index=False)
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _read_parquet_to_pandas(path: Path) -> pd.DataFrame:
+    path = Path(path)
     if not path.exists():
         return pd.DataFrame()
     if pq is not None:
@@ -83,47 +118,139 @@ def _read_parquet_to_pandas(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path.as_posix())
 
 
-def _ensure_measurements_parquet(csv_path: Path | None = None) -> Path:
-    """Bouw measurements.parquet vanuit de geconfigureerde bron.
+def _sql_path(path: Path) -> str:
+    """Escape een bestandspad voor gebruik als DuckDB SQL-string."""
+    return Path(path).as_posix().replace("'", "''")
 
-    - csv: bestaand gedrag via DuckDB read_csv_auto(...)
-    - dd_eco_api_v3: observations/references ophalen en naar raw-contract parquet schrijven
-    - fallback: als API faalt en DATA_SOURCE_FALLBACK == 'csv', gebruik het bestaande CSV-pad
+
+def parquet_row_count(path: Path) -> int:
+    """Lees alleen metadata/COUNT(*) voor een lichte buildvalidatie."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if duckdb is not None:
+        return int(duckdb.sql(
+            f"SELECT COUNT(*) FROM read_parquet('{_sql_path(path)}')"
+        ).fetchone()[0])
+    if pq is not None:
+        return int(pq.ParquetFile(path.as_posix()).metadata.num_rows)
+    return len(pd.read_parquet(path.as_posix()))
+
+
+def build_measurements_parquet(
+    csv_path: Path | None = None,
+    parquet_path: Path | None = None,
+    *,
+    force: bool = False,
+    ignore_errors: bool = False,
+) -> Path:
+    """Bouw measurements.parquet rechtstreeks uit CSV.
+
+    Dit is de gedeelde, Streamlit-onafhankelijke bouwfunctie voor zowel het
+    offline buildscript als de runtime-fallback. Er wordt eerst naar een
+    tijdelijk bestand geschreven en pas na validatie atomair gepubliceerd.
     """
-    csv_path = csv_path or Path(FILE_PATH)
+    if duckdb is None:
+        raise RuntimeError('DuckDB is niet geïnstalleerd; measurements.parquet kan niet worden gebouwd.')
 
-    def _ensure_from_csv(path: Path) -> Path:
-        if not path.exists() or duckdb is None:
-            return MEAS_PARQUET
-        need_build = (not MEAS_PARQUET.exists()) or (_mtime_or_zero(path) > _mtime_or_zero(MEAS_PARQUET))
-        if need_build:
-            con = _get_duckdb()
-            if con is not None:
-                con.execute(f"""
-                COPY (
-                    SELECT * FROM read_csv_auto(
-                        '{path.as_posix()}',
-                        delim=';',
-                        SAMPLE_SIZE=-1,
-                        IGNORE_ERRORS=TRUE
-                    )
-                ) TO '{MEAS_PARQUET.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD);
-                """)
-        return MEAS_PARQUET
+    source = Path(csv_path or FILE_PATH)
+    target = Path(parquet_path or MEAS_PARQUET)
+    if not source.exists():
+        raise FileNotFoundError(f'CSV-bronbestand ontbreekt: {source.resolve()}')
+    if not force and target.exists() and _mtime_or_zero(target) >= _mtime_or_zero(source):
+        return target
 
-    if str(DATA_SOURCE).strip().lower() == 'dd_eco_api_v3':
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_name(f'.{target.name}.tmp')
+    tmp_path.unlink(missing_ok=True)
+    con = duckdb.connect(database=':memory:')
+    try:
+        con.execute('PRAGMA threads=4;')
+        con.execute(f"""
+            COPY (
+                SELECT *
+                FROM read_csv_auto(
+                    '{_sql_path(source)}',
+                    delim=';',
+                    SAMPLE_SIZE=-1,
+                    IGNORE_ERRORS={'TRUE' if ignore_errors else 'FALSE'}
+                )
+            ) TO '{_sql_path(tmp_path)}'
+            (FORMAT PARQUET, COMPRESSION ZSTD);
+        """)
+        rows = int(con.execute(
+            f"SELECT COUNT(*) FROM read_parquet('{_sql_path(tmp_path)}')"
+        ).fetchone()[0])
+        if rows <= 0:
+            raise RuntimeError(f'Het gebouwde Parquet bevat geen rijen: {tmp_path}')
+        tmp_path.replace(target)
+        return target
+    finally:
+        con.close()
+        tmp_path.unlink(missing_ok=True)
+
+
+def ensure_measurements_parquet(
+    csv_path: Path | None = None,
+    *,
+    force: bool = False,
+    ignore_errors: bool = True,
+) -> Path:
+    """Zorg dat het geconfigureerde measurements.parquet beschikbaar en actueel is.
+
+    De runtime behoudt de bestaande API- en CSV-fallback. Het offline
+    buildscript kan dezelfde functie met ``force=True`` aanroepen.
+    """
+    source = str(DATA_SOURCE).strip().lower()
+    csv_path = Path(csv_path or FILE_PATH)
+
+    # In preloadmodus mag de online app nooit CSV/API-data omzetten.
+    # force=True blijft beschikbaar voor het expliciete offline buildscript.
+    if preloaded_parquets_enabled() and not force:
+        return require_preloaded_parquet(MEAS_PARQUET, 'measurements.parquet')
+
+    if source == 'dd_eco_api_v3':
         try:
-            need_build = (
-                (not MEAS_PARQUET.exists())
-                or (_mtime_or_zero(DD_API_MEAS_PARQUET) > _mtime_or_zero(MEAS_PARQUET))
-                or (_mtime_or_zero(DD_API_REFERENCES_PARQUET) > _mtime_or_zero(MEAS_PARQUET))
+            needs_build = (
+                force
+                or not MEAS_PARQUET.exists()
+                or _mtime_or_zero(DD_API_MEAS_PARQUET) > _mtime_or_zero(MEAS_PARQUET)
+                or _mtime_or_zero(DD_API_REFERENCES_PARQUET) > _mtime_or_zero(MEAS_PARQUET)
             )
-            if need_build:
-                return ensure_dd_eco_measurements_parquet(out_path=MEAS_PARQUET, refs_path=DD_API_REFERENCES_PARQUET)
+            if needs_build:
+                return ensure_dd_eco_measurements_parquet(
+                    out_path=MEAS_PARQUET,
+                    refs_path=DD_API_REFERENCES_PARQUET,
+                )
             return MEAS_PARQUET
         except Exception:
-            if str(DATA_SOURCE_FALLBACK or '').strip().lower() == 'csv':
-                return _ensure_from_csv(csv_path)
-            raise
+            if str(DATA_SOURCE_FALLBACK or '').strip().lower() != 'csv':
+                raise
 
-    return _ensure_from_csv(csv_path)
+    return build_measurements_parquet(
+        csv_path=csv_path,
+        parquet_path=MEAS_PARQUET,
+        force=force,
+        ignore_errors=ignore_errors,
+    )
+
+
+# Achterwaartse compatibiliteit: bestaande imports in data_access.py blijven werken.
+def _ensure_measurements_parquet(csv_path: Path | None = None) -> Path:
+    return ensure_measurements_parquet(csv_path=csv_path)
+
+
+__all__ = [
+    'build_measurements_parquet',
+    'ensure_measurements_parquet',
+    'parquet_row_count',
+    'preloaded_parquets_enabled',
+    'require_preloaded_parquet',
+    '_ensure_measurements_parquet',
+    '_get_duckdb',
+    '_mtime_or_zero',
+    '_path_fingerprint',
+    '_paths_fingerprint',
+    '_read_parquet_to_pandas',
+    '_write_parquet_from_pandas',
+]

@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 CACHE_DIR = BASE_DIR / '.cache_waterplanten'
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+PRELOADED_PARQUETS = True
 MEAS_PARQUET = CACHE_DIR / 'measurements.parquet'
 FINAL_PARQUET = CACHE_DIR / 'final_df.parquet'
 LOOKUP_PARQUET = CACHE_DIR / 'species_lookup.parquet'
